@@ -65,7 +65,7 @@ All four are open source. Facts come from each project's own README and GitHub o
 
 | | **Relevo** | [claude-swap](https://github.com/realiti4/claude-swap) | [ccs](https://github.com/kaitranntt/ccs) | [hatswap](https://github.com/orvi2014/hatswap) |
 |---|---|---|---|---|
-| Size and age | New; not yet published | 4,790 stars; since Jan 2026; last push Nov 15 | 2,907 stars; since Nov 2025; last push Nov 16 | 1 star, 28 commits; since Oct 11 2026; last push Oct 21 |
+| Size and age | New: public since 2026-11-18 | 4,790 stars; since Jan 2026; last push Nov 15 | 2,907 stars; since Nov 2025; last push Nov 16 | 1 star, 28 commits; since Oct 11 2026; last push Oct 21 |
 | How accounts are kept apart | One `CLAUDE_CONFIG_DIR` folder per account, as Claude Code's docs suggest. Logins never move | Copies the account's login into place on each switch (Keychain or credential files) and keeps backups of every login | Separate account folders by default (mechanism not described) | One `CLAUDE_CONFIG_DIR` folder per account. "No credentials are read, copied or modified" |
 | Shared history, `--resume` across accounts | Yes | Yes (default) | Opt-in "shared context groups" | Yes (default); an account can keep its own private history |
 | Move a running conversation to another account | `/switch <name>` in the session; it reopens in the same terminal | `cswap switch` in any terminal; the running session picks up the new login | Not stated | `/switch` or `/handoff` in the session (after `hatswap install-command`); restarts Claude Code |

@@ -11,6 +11,7 @@ All notable changes to Relevo. Versions follow `version` in `plugin/.claude-plug
 
 ### Changed
 
+- README: the comparison table says Relevo is public (since 2026-11-18).
 - The release check runs trufflehog offline (`--no-verification`), so no candidate string
   is ever sent to another service to be checked.
 
