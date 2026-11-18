@@ -4,6 +4,14 @@ All notable changes to Relevo. Versions follow `version` in `plugin/.claude-plug
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-18
+
+### Fixed
+
+- The note under the table for a full window read "until in 18h12m, seen 29m ago" when the
+  reset came from the status line. It now says "(resets in 18h12m, seen 29m ago)", and
+  "(resets Nov 19 9:29am)" for a live answer.
+
 ## [0.1.2] - 2026-11-18
 
 ### Fixed

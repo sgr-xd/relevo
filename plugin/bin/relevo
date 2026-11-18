@@ -544,7 +544,7 @@ cmd_list() {
           [ "$wp" -ge 100 ] || continue
           reset="$reset  ⛔"
           case "$wl" in Week*) wl=weekly ;; esac
-          foot="${foot}⛔ $name is at its $wl limit${wr:+ until $wr}.
+          foot="${foot}⛔ $name is at its $wl limit${wr:+ (resets $wr)}.
 "
           break
         done < "$tmpd/$t.w"

@@ -271,7 +271,7 @@ check "a bar and percent per window" line "$out" '^   jane +20d +█████
 check "columns: 5-hour, all-models week, then the rest" line "$out" '^   Account +Login +5-hour +Week, all models +Week, "Fable" +Resets$'
 check "Resets shows the fullest window, without the time zone" line "$out" '^   me .*Nov 22 6:30am$'
 check "time zones are dropped" hasnt "$out" "Europe/Paris"
-check "a full window is marked and explained" has "$out" "⛔ jane is at its 5-hour limit until 4pm."
+check "a full window is marked and explained" has "$out" "⛔ jane is at its 5-hour limit (resets 4pm)."
 check "the full row ends with its mark" line "$out" '^   jane .* 4pm  ⛔$'
 check "'Last …' and 'Top …' lines are dropped" hasnt "$out" "Top model"
 check "escaped quotes come through" line "$out" '^   bob .*█░░░░░░░░░   9%'
@@ -293,7 +293,7 @@ UTF8="$(locale -a 2>/dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -1)"
 if [ -n "$UTF8" ]; then
   out="$(EXTRA="LC_ALL=$UTF8 LANG=$UTF8" r list)"; code=$?
   check "the table renders in a UTF-8 locale ($UTF8)" [ "$code" = 0 ]
-  check "with its notes" has "$out" "⛔ jane is at its 5-hour limit until 4pm."
+  check "with its notes" has "$out" "⛔ jane is at its 5-hour limit (resets 4pm)."
 else echo "note: no UTF-8 locale on this machine; UTF-8 run skipped"; fi
 cleanup
 
@@ -306,6 +306,9 @@ seen_json acc2 12.4 7530 40 274000 300
 start=$SECONDS; out="$(EXTRA=RELEVO_USAGE_TIMEOUT=2 r list)"; took=$(( SECONDS - start ))
 check "a slow account is stopped at the timeout" [ "$took" -lt 6 ]
 check "its check was cut off" hasnt "$(log)" "usage-done cfg=$B/acc2"
+seen_json acc2 100 3630 40 274000 300; out="$(EXTRA=RELEVO_USAGE_TIMEOUT=2 r list --cached)"
+check "a last-seen full window reads naturally" has "$out" "⛔ jane is at its 5-hour limit (resets in 1h00m, seen 5m ago)."
+seen_json acc2 12.4 7530 40 274000 300; out="$(EXTRA=RELEVO_USAGE_TIMEOUT=2 r list --cached)"
 check "it shows what the status line last saw, with its age" line "$out" '^   jane +20d +█░░░░░░░░░  12% +████░░░░░░  40% +in 3d4h, seen 5m ago$'
 seen_json acc2 100 -60 40 274000 7300
 out="$(r list --cached)"

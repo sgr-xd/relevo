@@ -1,6 +1,6 @@
 {
   "name": "relevo",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Several Claude accounts (work, personal, client orgs) as named profiles; /switch continues the same conversation on another account in the same terminal.",
   "author": { "name": "sgr-xd" },
   "license": "Apache-2.0",
