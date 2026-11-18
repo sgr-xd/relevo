@@ -1,9 +1,28 @@
-# Relevo design (D0) — WIP, paused
+# Relevo design
 
-**Status: paused on 2026-11-18 by the orchestrator.** The existence check returned DROP (many
-existing account switchers, e.g. claude-swap, ccs, hatswap; Anthropic's `CLAUDE_CONFIG_DIR` docs
-already suggest one config folder per account). The owner decides whether to drop or build anyway.
-This file holds what D0 had established when it stopped. It does not yet propose milestones S1…
+**Status (2026-11-18):** D0 was paused after a DROP verdict, then resumed with a narrower scope:
+package the owner's working prototype (`cc-as`) as the Relevo plugin. What sets it apart from
+claude-swap, ccs and hatswap is an in-session `/switch <name>`: the session closes and the same
+conversation reopens on another account, in the same terminal, without touching tokens or
+Keychain entries. Milestones R1 (package), R2 (/account, usage, status line), R3 (docs).
+macOS and Linux only for v0.1.
+
+## R1 decisions
+
+| Question | Decision | Evidence |
+|---|---|---|
+| `/switch` without a model turn | A plugin hooks module (`plugin/hooks/register.ts`) registers `/switch` and `/relevo` with `$.command.register`. Its `command.run` hook answers `{ text, isTextDisplayOnly }` with no `next`, so no model turn starts. | `claude -p "/switch p2"`: `num_turns 0`, zero API requests, even with no login and no API key |
+| How the session closes | The mod queues `/exit` via `$.clock.after(300)`. A `command.run` hook may not call `$.command.run` itself (host check: "it would wait on the turn this hook is holding"). If `/exit` is refused, it falls back to SIGTERM on `CLAUDE_PID`. | pty run: SessionEnd `prompt_input_exit`, then the wrapper resumed the same session id on the other profile |
+| Session id and Claude's PID | `$.process.hookEnv()` gives `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`, `CLAUDE_PROJECT_DIR`. The host environment (`RELEVO_WRAPPER`, `RELEVO_PROFILE`, `CLAUDE_CONFIG_DIR`) is inherited. | spike log |
+| Name clash with a user `commands/switch.md` (the prototype) | The mod's `/switch` ran, not the user command | `-p` test |
+| CLI language | Bash, 3.2-compatible, with no python/node/jq: coreutils, sed, awk and BSD-or-GNU `date` only | suite passes on macOS bash 3.2 and Debian bash 5.2 |
+| CLI on PATH | A plugin cannot put a command on the shell's PATH: its `bin/` reaches only Claude's Bash tool. One step instead: `/relevo install` (in a session, no model turn) copies the CLI to `~/.claude-profiles/.bin/relevo` and links `~/.local/bin/relevo` to it. Each session start runs `relevo _sync`, which refreshes that copy, so plugin updates reach the PATH command. | real-binary `-p` run |
+| Same session open in two profiles | Prevented by order: the wrapper reopens only after the first session has exited (D0 finding #1 shows the harm otherwise) | switch-loop tests |
+| Tokens | None. No `user_config` secrets and no setup-token. `relevo add <email>` runs Claude Code's own `claude auth login --claudeai --email …` for the new profile folder, then checks `claude auth status`. | fake-claude tests |
+| Login expiry | From `loginExpiresAt` in `claude auth status --json`, with a warning under `warn_days` (plugin option, default 5). `/switch` to a signed-out or expired profile is refused. Whether using a profile extends its expiry is **unknown** (not testable without real logins). | tests |
+| New profile folders | Neutral `acc<N>` names, because a folder can never be renamed (the login is tied to its path). Names live in `.names` and can change freely. | — |
+
+## D0 findings (kept for reference)
 
 ## How the spikes ran
 

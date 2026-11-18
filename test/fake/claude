@@ -1,0 +1,52 @@
+#!/bin/bash
+# Fake `claude` for tests. Never contacts anything and holds no secrets.
+#   auth status --json   prints status from <config dir>/fake-auth ("<email> <expiry ISO>", "out" or "garbage")
+#   auth login ...       logs its arguments; signs in as $FAKE_LOGIN_AS (or the --email given)
+#                        unless FAKE_LOGIN_FAIL=1
+#   anything else        a "session": logs how it was started, then runs the next line of $FAKE_PLAN:
+#                          switch <name>   what /switch does (relevo _switch with the session's env)
+#                          inject <text>   writes <text> as this wrapper's switch request (tamper test)
+#                          exit <code>     ends with that code
+cfgdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+log() { printf '%s\n' "$*" >> "$FAKE_LOG"; }
+
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  st="$(cat "$cfgdir/fake-auth" 2>/dev/null || echo out)"
+  case "$st" in
+    out) printf '{\n  "loggedIn": false,\n  "authMethod": "none",\n  "loginExpiresAt": null\n}\n'; exit 1 ;;
+    garbage) echo "not json"; exit 0 ;;
+  esac
+  set -- $st
+  printf '{\n  "loggedIn": true,\n  "authMethod": "claude.ai",\n  "email": "%s",\n  "loginExpiresAt": "%s"\n}\n' "$1" "$2"
+  exit 0
+fi
+
+if [ "${1:-}" = auth ] && [ "${2:-}" = login ]; then
+  log "login cfg=${CLAUDE_CONFIG_DIR-UNSET} args=${*:3}"
+  [ -z "${CLAUDE_CONFIG_DIR:-}" ] && log "FORBIDDEN login against the default profile"
+  [ "${FAKE_LOGIN_FAIL:-}" = 1 ] && exit 1
+  email="${FAKE_LOGIN_AS:-}"
+  while [ $# -gt 0 ]; do [ "$1" = --email ] && [ -z "$email" ] && email="$2"; shift; done
+  printf '%s %s\n' "$email" "$FAKE_EXPIRY" > "$cfgdir/fake-auth"
+  exit 0
+fi
+
+case "${1:-} ${2:-}" in
+  "auth logout"*|"setup-token"*) log "FORBIDDEN $*"; exit 99 ;;
+esac
+
+log "run cfg=${CLAUDE_CONFIG_DIR-UNSET} profile=${RELEVO_PROFILE:-} pwd=$PWD args=$*"
+n="$(cat "$FAKE_PLAN.n" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "$n" > "$FAKE_PLAN.n"
+step="$(sed -n "${n}p" "$FAKE_PLAN" 2>/dev/null)"
+case "$step" in
+  "switch "*)
+    out="$(CLAUDE_CODE_SESSION_ID="$FAKE_SID" CLAUDE_PID=$$ CLAUDE_PROJECT_DIR="${FAKE_PROJECT:-$PWD}" \
+           $FAKE_RELEVO _switch ${step#switch })"
+    log "switch-exit=$? out=$out"
+    exit 0 ;;
+  "inject "*)
+    printf '%b' "${step#inject }" > "$HOME/.claude-profiles/.switch/$RELEVO_WRAPPER"
+    exit 0 ;;
+  "exit "*) exit "${step#exit }" ;;
+esac
+exit 0

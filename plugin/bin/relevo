@@ -1,0 +1,368 @@
+#!/usr/bin/env bash
+# relevo — run Claude Code as one of several accounts (work, personal, client orgs) and move a
+# conversation from one account to another, the way Claude Code's docs describe multiple
+# accounts: one CLAUDE_CONFIG_DIR per account.
+#
+# Each profile lives in ~/.claude-profiles/<folder> with its own login. Everything else links
+# back to ~/.claude, so settings, plugins, skills, agents, commands, hooks, memory and session
+# history are shared, which is why a conversation can continue on another account.
+# Profiles are called by the part of the account's email before the @ (relevo names).
+#
+#   relevo add <email> [--sso] [--name <name>]
+#                                add an account: new profile, then Claude Code's own sign-in page
+#   relevo list                  every account, its name, and whether it is signed in
+#   relevo <name> [claude args]  run claude as that account, e.g. relevo jane.doe --resume <id>
+#   relevo run <name> [args]     the same, for a name that matches one of these commands
+#   relevo rename <name> <new>   give an account another name
+#   relevo names                 (re)name every profile from its account email (replaces renames)
+#   relevo new <folder>          add an empty profile without signing in
+#   relevo fix <name>            re-create shared links (if a settings save replaced one)
+#   relevo install               put relevo on your PATH (~/.local/bin/relevo)
+#
+# Inside a session started with relevo, type  /switch <name> : this session closes and the
+# same conversation reopens on that account, in the same terminal.
+#
+# Never reads or prints credentials. Never touches the default profile's login. A profile's
+# folder is never renamed: Claude Code ties the login to the folder's path.
+set -u
+
+PROG=relevo
+BASE="${RELEVO_HOME:-$HOME/.claude-profiles}"
+MAIN="$HOME/.claude"
+NAMES="$BASE/.names"            # lines: "<name> <target>", target = main or a folder in BASE
+SWITCH_DIR="$BASE/.switch"
+BIN_COPY="$BASE/.bin/$PROG"     # stable copy that ~/.local/bin/relevo points to
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+NAME_RE='^[a-z0-9][a-z0-9._-]{0,63}$'
+RESERVED=" main add list names new fix run rename install help _switch _sync "
+WARN_DAYS="${RELEVO_WARN_DAYS:-5}"; [[ "$WARN_DAYS" =~ ^[0-9]{1,3}$ ]] || WARN_DAYS=5
+SHARED=(settings.json CLAUDE.md agents commands hooks output-styles plugins skills projects
+        file-history plans dev-mods history.jsonl)
+
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+valid() { [[ "$1" =~ $NAME_RE ]] || die "names use a-z, 0-9, '.', '-' and '_' (got '$1')"; }
+
+# name or folder -> target ("main" or a folder name in BASE); empty if unknown
+resolve() {
+  local n="$1" t
+  [ "$n" = main ] && { echo main; return; }
+  if [ -f "$NAMES" ]; then
+    t="$(awk -v n="$n" '$1 == n { print $2; exit }' "$NAMES")"
+    [ -n "$t" ] && { echo "$t"; return; }
+  fi
+  [ -d "$BASE/$n" ] && [ ! -L "$BASE/$n" ] && echo "$n"
+}
+
+# target -> display name (first name mapped to it, else the target itself)
+name_of() {
+  local t="$1" n=""
+  [ -f "$NAMES" ] && n="$(awk -v t="$t" '$2 == t { print $1; exit }' "$NAMES")"
+  echo "${n:-$t}"
+}
+
+# Run a command with the right config for a target. The default profile runs with
+# CLAUDE_CONFIG_DIR unset: setting it to ~/.claude would make Claude Code look for another login.
+cfg_env() {
+  local t="$1"; shift
+  if [ "$t" = main ]; then env -u CLAUDE_CONFIG_DIR "$@"; else env CLAUDE_CONFIG_DIR="$BASE/$t" "$@"; fi
+}
+
+targets() { echo main; [ -d "$BASE" ] && for d in "$BASE"/*/; do [ -d "$d" ] && [ ! -L "${d%/}" ] && basename "$d"; done; }
+
+# --- login status, from `claude auth status --json` (no secrets in it; nothing else is read) ---
+# Sets LOGIN (in|out|unknown), EXP_DATE (YYYY-MM-DD or empty), EXP_LEFT (seconds or empty), EMAIL.
+json_str() { printf '%s' "$2" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"; }
+iso_epoch() {  # 2026-12-16T05:00:00.000Z -> epoch seconds (BSD and GNU date)
+  local s="${1%%.*}"; s="${s%Z}"; s="${s%+00:00}"
+  date -u -j -f '%Y-%m-%dT%H:%M:%S' "$s" +%s 2>/dev/null || date -u -d "${s}Z" +%s 2>/dev/null
+}
+login_state() {
+  local j exp e
+  LOGIN=unknown EXP_DATE="" EXP_LEFT="" EMAIL=""
+  j="$(cfg_env "$1" claude auth status --json 2>/dev/null | tr -d '\n')"
+  [ -n "$j" ] || return 0
+  if printf '%s' "$j" | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*true'; then LOGIN=in
+  elif printf '%s' "$j" | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*false'; then LOGIN=out; return 0
+  else return 0; fi
+  EMAIL="$(json_str email "$j")"
+  exp="$(json_str loginExpiresAt "$j")"
+  [ -n "$exp" ] || return 0
+  EXP_DATE="${exp:0:10}"
+  e="$(iso_epoch "$exp")" && [ -n "$e" ] && EXP_LEFT=$(( e - $(date +%s) ))
+  return 0
+}
+login_line() {  # target -> one line for `relevo list`
+  local days
+  login_state "$1"
+  case "$LOGIN" in
+    out) echo "NOT signed in"; return ;;
+    unknown) echo "status unknown"; return ;;
+  esac
+  if [ -z "$EXP_LEFT" ]; then echo "signed in"; return; fi
+  if [ "$EXP_LEFT" -le 0 ]; then
+    echo "login expired $EXP_DATE  ← sign in again: $PROG $(name_of "$1"), then /login"; return
+  fi
+  days=$(( EXP_LEFT / 86400 ))
+  local when="in $days days"; [ "$days" -eq 1 ] && when="in 1 day"; [ "$days" -eq 0 ] && when="in under a day"
+  local warn=""; [ "$days" -lt "$WARN_DAYS" ] && warn="  ← sign in again soon"
+  echo "signed in · login expires $when ($EXP_DATE)$warn"
+}
+local_name() {  # email -> its local part, lower-cased and made into a valid name (may be empty)
+  printf '%s' "${1%%@*}" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g; s/^[^a-z0-9]*//' | cut -c1-64
+}
+email_local() {  # target -> name from its signed-in email, or empty
+  login_state "$1"
+  [ "$LOGIN" = in ] && [[ "$EMAIL" == *@* ]] || return 0
+  local_name "$EMAIL"
+}
+
+# " a b c ": every word a new name must not be (commands, names in use, folder names)
+taken_words() {
+  local w="$RESERVED" t
+  [ -f "$NAMES" ] && w="$w$(awk '{ printf "%s ", $1 }' "$NAMES")"
+  while read -r t; do w="$w$t "; done < <(targets)
+  echo "$w"
+}
+dedupe() {  # name, taken words -> name, or name-2, name-3 … if taken
+  local n="$1" base="$1" i=2
+  while [[ "$2" == *" $n "* ]]; do n="$base-$i"; i=$((i+1)); done
+  echo "$n"
+}
+set_name() {  # name target: map name to target, dropping that target's and that name's old lines
+  local tmp
+  mkdir -p "$BASE" && chmod 700 "$BASE" || die "could not create $BASE"
+  tmp="$(mktemp "$BASE/.names.XXXXXX")" || die "could not write in $BASE"
+  [ -f "$NAMES" ] && awk -v n="$1" -v t="$2" '$1 != n && $2 != t' "$NAMES" > "$tmp"
+  printf '%s %s\n' "$1" "$2" >> "$tmp"
+  chmod 600 "$tmp" && mv "$tmp" "$NAMES" || die "could not save names"
+}
+make_profile() {  # folder: create it with the shared links
+  local dir="$BASE/$1"
+  { [ -e "$dir" ] || [ -L "$dir" ]; } && die "$dir already exists"
+  mkdir -p "$BASE" && chmod 700 "$BASE" || die "could not create $BASE"
+  mkdir -m 700 "$dir" || die "could not create $dir"
+  link_shared "$dir"
+}
+
+link_shared() {
+  local dir="$1" item
+  for item in "${SHARED[@]}"; do
+    [ -e "$MAIN/$item" ] || continue
+    [ -L "$dir/$item" ] && continue
+    if [ -e "$dir/$item" ]; then
+      printf '  kept %s (a real file is there; remove it and run "%s fix" to share it again)\n' "$item" "$PROG"
+      continue
+    fi
+    ln -s "$MAIN/$item" "$dir/$item"
+  done
+}
+
+# Run claude for a target and stay around: if the session asked to switch (via /switch), reopen
+# the same conversation on the requested target. Otherwise exit with claude's exit code.
+# The session always closes before it reopens, so it is never open in two profiles at once.
+run_loop() {
+  local target="$1"; shift
+  local req="$SWITCH_DIR/$$" code to sid dir
+  mkdir -p "$SWITCH_DIR" && chmod 700 "$BASE" "$SWITCH_DIR" || die "could not create $SWITCH_DIR"
+  [ -n "${CLAUDE_CODE_CHILD_SESSION:-}" ] && \
+    printf '%s: note: started from inside a Claude Code session; Claude Code leaves nested sessions out of --resume.\n' "$PROG" >&2
+  while :; do
+    rm -f "$req"
+    cfg_env "$target" RELEVO_WRAPPER=$$ RELEVO_PROFILE="$target" claude "$@"
+    code=$?
+    [ -f "$req" ] || exit "$code"
+    to="$(sed -n 1p "$req")"; sid="$(sed -n 2p "$req")"; dir="$(sed -n 3p "$req")"; rm -f "$req"
+    [[ "$to" =~ $NAME_RE ]] && { [ "$to" = main ] || { [ -d "$BASE/$to" ] && [ ! -L "$BASE/$to" ]; }; } \
+      || die "no profile '$to' in switch request"
+    [[ "$sid" =~ $UUID_RE ]] || die "bad session id in switch request"
+    if [ -n "$dir" ] && [ -d "$dir" ]; then cd "$dir" || die "could not enter $dir"; fi
+    printf '\n↪ continuing this conversation as %s …\n\n' "$(name_of "$to")"
+    target="$to"
+    set -- --resume "$sid"
+  done
+}
+
+# Called by /switch from inside a running session (the plugin passes the session's environment).
+# Exit 0: a switch was requested and the caller should close the session now.
+# Exit 3: nothing to do; the printed line says why. Exit 1: an error.
+cmd_switch() {
+  local want="${1:-}" to sid dir tmp
+  [ -n "$want" ] || { echo "usage: /switch <name>   ($PROG list shows the names)"; exit 3; }
+  [[ "$want" =~ $NAME_RE ]] || { echo "No account named '$want' ($PROG list shows them)."; exit 3; }
+  to="$(resolve "$want")"
+  [ -n "$to" ] || { echo "No account named '$want' ($PROG list shows them)."; exit 3; }
+  sid="${CLAUDE_CODE_SESSION_ID:-}"
+  [[ "$sid" =~ $UUID_RE ]] || die "this doesn't look like a Claude Code session"
+  if [ "${RELEVO_PROFILE:-}" = "$to" ]; then echo "Already on $want."; exit 3; fi
+  login_state "$to"
+  if [ "$LOGIN" = out ] || { [ -n "$EXP_LEFT" ] && [ "$EXP_LEFT" -le 0 ]; }; then
+    printf '%s is not signed in%s. Sign in again: %s %s, then /login\n' "$want" \
+      "${EXP_DATE:+ (login expired $EXP_DATE)}" "$PROG" "$want"
+    exit 3
+  fi
+  dir="${CLAUDE_PROJECT_DIR:-$PWD}"
+  if [ -z "${RELEVO_WRAPPER:-}" ] || ! [[ "$RELEVO_WRAPPER" =~ ^[0-9]+$ ]] || ! kill -0 "$RELEVO_WRAPPER" 2>/dev/null; then
+    printf 'This session was not started with %s, so it cannot reopen itself.\nExit, then run:  cd %q && %s %s --resume %s\n' \
+      "$PROG" "$dir" "$PROG" "$want" "$sid"
+    exit 3
+  fi
+  mkdir -p "$SWITCH_DIR" && chmod 700 "$SWITCH_DIR" || die "could not create $SWITCH_DIR"
+  tmp="$(mktemp "$SWITCH_DIR/.req.XXXXXX")" && printf '%s\n%s\n%s\n' "$to" "$sid" "$dir" > "$tmp" \
+    && mv "$tmp" "$SWITCH_DIR/$RELEVO_WRAPPER" || die "could not write the switch request"
+  echo "Switching to $want: this session closes and reopens as $want with the same conversation."
+}
+
+cmd_names() {
+  local tmp used t n base i
+  mkdir -p "$BASE" && chmod 700 "$BASE" || die "could not create $BASE"
+  tmp="$(mktemp "$BASE/.names.XXXXXX")" || die "could not write in $BASE"
+  used="$RESERVED"   # plain string, not an associative array: macOS ships bash 3.2
+  while read -r t; do
+    n="$(email_local "$t")"
+    if [ -z "$n" ]; then printf '  %-8s not signed in, left unnamed\n' "$t"; continue; fi
+    base="$n"; i=2; while [[ "$used" == *" $n "* ]]; do n="$base-$i"; i=$((i+1)); done
+    used="$used$n "; printf '%s %s\n' "$n" "$t" >> "$tmp"
+    printf '  %-8s → %s\n' "$t" "$n"
+  done < <(targets)
+  chmod 600 "$tmp" && mv "$tmp" "$NAMES" || die "could not save names"
+  echo "Names saved. Use them with $PROG <name> and /switch <name>."
+}
+
+cmd_new() {
+  local folder="${1:-}"
+  [ -n "$folder" ] || die "usage: $PROG new <folder>"
+  valid "$folder"
+  [[ "$RESERVED" == *" $folder "* ]] && die "'$folder' is a $PROG command or the default profile"
+  [ -n "$(resolve "$folder")" ] && die "'$folder' is already taken"
+  make_profile "$folder"
+  printf 'Created profile %s.\nSign in once:  %s %s   then type /login, exit, and run:  %s names\n' \
+    "$folder" "$PROG" "$folder" "$PROG"
+}
+
+# Guided sign-in: a new profile, then Claude Code's own browser sign-in for it. Relevo never sees
+# a password or token; it checks the result with `claude auth status` afterwards.
+cmd_add() {
+  local email="" sso="" name="" given="" folder i code want got taken
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --sso) sso=--sso ;;
+      --name) shift; name="${1:-}"; given=1 ;;
+      --name=*) name="${1#--name=}"; given=1 ;;
+      -*) die "unknown option $1 (usage: $PROG add <email> [--sso] [--name <name>])" ;;
+      *) [ -z "$email" ] || die "usage: $PROG add <email> [--sso] [--name <name>]"; email="$1" ;;
+    esac
+    shift
+  done
+  [[ "$email" =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] || die "usage: $PROG add <email> [--sso] [--name <name>]"
+  taken="$(taken_words)"
+  if [ -n "$given" ]; then
+    valid "$name"
+    [[ "$taken" == *" $name "* ]] && die "'$name' is already taken (or is a $PROG command)"
+  else
+    name="$(local_name "$email")"; [ -n "$name" ] || die "cannot make a name from '$email'; pass --name"
+    name="$(dedupe "$name" "$taken")"
+  fi
+  i=2; while [ -e "$BASE/acc$i" ] || [ -L "$BASE/acc$i" ] || [[ "$taken" == *" acc$i "* ]]; do i=$((i+1)); done
+  folder="acc$i"
+  make_profile "$folder"
+  set_name "$name" "$folder"
+  printf 'Created profile %s (%s). Opening Claude Code'"'"'s sign-in page for %s …\n' "$name" "$folder" "$email"
+  if [ -n "$sso" ]; then cfg_env "$folder" claude auth login --claudeai --email "$email" --sso
+  else cfg_env "$folder" claude auth login --claudeai --email "$email"; fi
+  code=$?
+  login_state "$folder"
+  if [ "$LOGIN" != in ]; then
+    printf 'Not signed in yet (sign-in exit code %s). The profile is kept; finish later with:  %s %s   then /login\n' \
+      "$code" "$PROG" "$name"
+    exit 1
+  fi
+  want="$(printf '%s' "$email" | tr 'A-Z' 'a-z')"; got="$(printf '%s' "$EMAIL" | tr 'A-Z' 'a-z')"
+  if [ -n "$got" ] && [ "$got" != "$want" ]; then
+    if [ -n "$given" ]; then
+      printf 'Notice: this profile signed in as %s, not %s. It keeps the name %s.\n' "$EMAIL" "$email" "$name"
+    else
+      local new; new="$(local_name "$EMAIL")"
+      [ -n "$new" ] && [ "$new" != "$name" ] && new="$(dedupe "$new" "$(taken_words)")" && set_name "$new" "$folder"
+      printf 'Notice: this profile signed in as %s, not %s, so it is named %s.\n' "$EMAIL" "$email" "${new:-$name}"
+      name="${new:-$name}"
+    fi
+  fi
+  printf 'Signed in. Start it with:  %s %s\n' "$PROG" "$name"
+}
+
+cmd_rename() {
+  local old="${1:-}" new="${2:-}" t
+  [ -n "$old" ] && [ -n "$new" ] || die "usage: $PROG rename <name> <new name>"
+  valid "$old"; valid "$new"
+  t="$(resolve "$old")"; [ -n "$t" ] || die "no account named '$old'"
+  [ "$(resolve "$new")" = "$t" ] && { echo "$old is already called $new."; return; }
+  [[ "$(taken_words)" == *" $new "* ]] && die "'$new' is already taken (or is a $PROG command)"
+  set_name "$new" "$t"
+  echo "Renamed $old to $new."
+}
+
+cmd_fix() {
+  local want="${1:-}" t
+  [ -n "$want" ] || die "usage: $PROG fix <name>"
+  valid "$want"; t="$(resolve "$want")"
+  [ -n "$t" ] && [ "$t" != main ] || die "no profile '$want'"
+  link_shared "$BASE/$t"; echo "Links checked for $want."
+}
+
+cmd_list() {
+  local t
+  while read -r t; do
+    printf '%-24s %-8s %s\n' "$(name_of "$t")" "($t)" "$(login_line "$t")"
+  done < <(targets)
+}
+
+self_path() { local d; d="$(cd -P "$(dirname "$0")" && pwd -P)" && echo "$d/$(basename "$0")"; }
+
+# Copy this script to a stable place and link ~/.local/bin/relevo to it. The plugin refreshes
+# the copy at session start (_sync), so plugin updates reach the command on your PATH.
+cmd_install() {
+  local self link="$HOME/.local/bin/$PROG"
+  self="$(self_path)" || die "cannot find myself"
+  if [ -e "$link" ] || [ -L "$link" ]; then
+    [ -L "$link" ] && [ "$(readlink "$link")" = "$BIN_COPY" ] || die "$link already exists and is not $PROG's link; remove it first"
+  fi
+  mkdir -p "$BASE/.bin" "$HOME/.local/bin" && chmod 700 "$BASE" || die "could not create folders"
+  copy_self "$self" || die "could not copy to $BIN_COPY"
+  [ -L "$link" ] || ln -s "$BIN_COPY" "$link" || die "could not create $link"
+  echo "Installed: $link → $BIN_COPY"
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) echo "Run $PROG list in a terminal to check it." ;;
+    *) echo "~/.local/bin is not on your PATH yet; add it in your shell profile, then run $PROG list." ;;
+  esac
+}
+copy_self() {  # atomic replace, so a running copy is never half-written
+  local tmp
+  tmp="$(mktemp "$BASE/.bin/.$PROG.XXXXXX")" && cp "$1" "$tmp" && chmod 755 "$tmp" && mv "$tmp" "$BIN_COPY"
+}
+cmd_sync() {  # refresh the installed copy if there is one and it differs
+  local self
+  [ -f "$BIN_COPY" ] || exit 0
+  self="$(self_path)" || exit 0
+  [ "$self" = "$BIN_COPY" ] && exit 0
+  cmp -s "$self" "$BIN_COPY" || copy_self "$self" || exit 1
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  ""|-h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
+  _switch) shift; cmd_switch "$@" ;;
+  _sync)   cmd_sync ;;
+  add)     shift; cmd_add "$@" ;;
+  rename)  shift; cmd_rename "$@" ;;
+  names)   cmd_names ;;
+  new)     shift; cmd_new "$@" ;;
+  fix)     shift; cmd_fix "$@" ;;
+  list)    cmd_list ;;
+  install) cmd_install ;;
+  run|*)
+    [ "$cmd" = run ] && { shift; cmd="${1:-}"; [ -n "$cmd" ] || die "usage: $PROG run <name> [claude args]"; }
+    valid "$cmd"; t="$(resolve "$cmd")"
+    [ -n "$t" ] || die "no account named '$cmd' ($PROG list shows them; $PROG new adds one)"
+    shift; run_loop "$t" "$@"
+    ;;
+esac

@@ -1,0 +1,7 @@
+{
+  "name": "relevo",
+  "owner": { "name": "sgr-xd" },
+  "plugins": [
+    { "name": "relevo", "source": "./plugin", "description": "Named Claude account profiles and in-session /switch" }
+  ]
+}

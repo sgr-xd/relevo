@@ -1,0 +1,19 @@
+{
+  "name": "relevo",
+  "version": "0.1.0",
+  "description": "Several Claude accounts (work, personal, client orgs) as named profiles; /switch continues the same conversation on another account in the same terminal.",
+  "author": { "name": "sgr-xd" },
+  "license": "Apache-2.0",
+  "keywords": ["accounts", "profiles", "multi-account"],
+  "engines": { "claude-code": ">=2.1.327" },
+  "userConfig": {
+    "warn_days": {
+      "type": "number",
+      "title": "Login warning (days)",
+      "description": "Warn when an account's login expires within this many days.",
+      "default": 5,
+      "min": 1,
+      "max": 30
+    }
+  }
+}
