@@ -6,7 +6,7 @@
 #   auth login ...       logs its arguments; signs in as $FAKE_LOGIN_AS (or the --email given)
 #                        unless FAKE_LOGIN_FAIL=1
 #   anything else        a "session": logs how it was started, then runs the next line of $FAKE_PLAN:
-#                          switch <name>   what /switch does (relevo _switch with the session's env)
+#                          switch <name>   what /relevo switch does (relevo _switch with the session's env)
 #                          inject <text>   writes <text> as this wrapper's switch request (tamper test)
 #                          exit <code>     ends with that code
 cfgdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"

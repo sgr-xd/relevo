@@ -35,11 +35,11 @@ function engine(on: On, exitCode: number, stdout: string) {
   return { ran, exits, timers }
 }
 
-test('/switch asks the CLI, shows its answer without a model turn, then closes the session', async ($, on) => {
+test('/relevo switch asks the CLI, shows its answer without a model turn, then closes the session', async ($, on) => {
   const seen = engine(on, 0, 'Switching to bob: this session closes and reopens as bob.\n')
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
 
-  const out = await $.command.run({ command: 'switch', args: ' bob ' })
+  const out = await $.command.run({ command: 'relevo', args: ' switch  bob ' })
 
   expect(out.text).toBe('Switching to bob: this session closes and reopens as bob.')
   expect(out.isTextDisplayOnly).toBe(true)
@@ -52,18 +52,18 @@ test('/switch asks the CLI, shows its answer without a model turn, then closes t
   expect(seen.exits).toEqual(['exit'])
 })
 
-test('/switch that the CLI refuses keeps the session open', async ($, on) => {
+test('/relevo switch that the CLI refuses keeps the session open', async ($, on) => {
   const seen = engine(on, 3, 'No account named nobody (relevo list shows them).\n')
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
 
-  const out = await $.command.run({ command: 'switch', args: 'nobody' })
+  const out = await $.command.run({ command: 'relevo', args: 'switch nobody' })
 
   expect(out.text).toBe('No account named nobody (relevo list shows them).')
   expect(seen.timers).toEqual([])
   expect(seen.exits).toEqual([])
 })
 
-test('/relevo runs only the subcommands that are safe inside a session', async ($, on) => {
+test('/relevo runs only the subcommands that are safe inside a session, and switch', async ($, on) => {
   const seen = engine(on, 0, 'me (main) signed in\n')
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
 
@@ -123,12 +123,12 @@ const settle = async (until: () => boolean) => {
 const LIMIT = { code: 4, out: 'bob is at a usage limit: Current session: 100% used · resets 4pm\n' }
 const SWITCHING = { code: 0, out: 'Switching to bob.\n' }
 
-test('/switch to an account at its limit asks first; "Switch anyway" switches', async ($, on) => {
+test('/relevo switch to an account at its limit asks first; "Switch anyway" switches', async ($, on) => {
   const seen = scripted(on, [LIMIT, SWITCHING])
   const asked = answerAsk(on, 'Switch anyway')
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
 
-  const out = await $.command.run({ command: 'switch', args: 'bob' })
+  const out = await $.command.run({ command: 'relevo', args: 'switch bob' })
 
   expect(asked[0]).toBe('bob is at a usage limit: Current session: 100% used · resets 4pm Switch anyway?')
   expect(seen.ran.map(r => r.argv.slice(1))).toEqual([['_switch', 'bob'], ['_switch', 'bob', '--anyway']])
@@ -138,12 +138,12 @@ test('/switch to an account at its limit asks first; "Switch anyway" switches', 
 })
 
 for (const [name, label] of [['says "Stay"', 'Stay on this account'], ['closes the question', null]] as const) {
-  test(`/switch to an account at its limit stays when the person ${name}`, async ($, on) => {
+  test(`/relevo switch to an account at its limit stays when the person ${name}`, async ($, on) => {
     const seen = scripted(on, [LIMIT, SWITCHING])
     answerAsk(on, label)
     await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
 
-    const out = await $.command.run({ command: 'switch', args: 'bob' })
+    const out = await $.command.run({ command: 'relevo', args: 'switch bob' })
 
     expect(out.text).toContain('Staying on this account.')
     expect(seen.ran.length).toBe(1)
@@ -152,11 +152,11 @@ for (const [name, label] of [['says "Stay"', 'Stay on this account'], ['closes t
   })
 }
 
-test('/account shows the CLI account view without a model turn', async ($, on) => {
+test('/relevo account shows the CLI account view without a model turn', async ($, on) => {
   const seen = scripted(on, [{ code: 0, out: '▶ jane (acc2) signed in\n' }])
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
 
-  const out = await $.command.run({ command: 'account' })
+  const out = await $.command.run({ command: 'relevo', args: 'account' })
 
   expect(out.text).toBe('▶ jane (acc2) signed in')
   expect(out.isTextDisplayOnly).toBe(true)
@@ -164,7 +164,7 @@ test('/account shows the CLI account view without a model turn', async ($, on) =
 })
 
 test('a rate-limit stop posts where to continue, and never switches', async ($, on) => {
-  const msg = 'Usage limit reached on jane. To continue this conversation on bob:  /switch bob'
+  const msg = 'Usage limit reached on jane. To continue this conversation on bob:  /relevo switch bob'
   const seen = scripted(on, [{ code: 0, out: `${msg}\n` }])
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
 
@@ -178,4 +178,25 @@ test('a rate-limit stop posts where to continue, and never switches', async ($, 
 
   await $.classic.StopFailure({ error: 'server_error' })
   expect(seen.ran.length).toBe(1)
+})
+
+test('only /relevo is registered: no bare /switch or /account that a built-in could clash with', async ($, on) => {
+  const names: string[] = []
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', (_, e) => (names.push(e.name), { value: { command: e.name } }))
+  on('process.hookEnv', () => ({ value: ENV }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+  expect(names).toEqual(['relevo'])
+})
+
+test('/relevo with no subcommand shows the help', async ($, on) => {
+  const seen = scripted(on, [{ code: 0, out: 'Relevo: several Claude accounts, one Claude Code.\n' }])
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+  const out = await $.command.run({ command: 'relevo', args: '' })
+
+  expect(out.text).toBe('Relevo: several Claude accounts, one Claude Code.')
+  expect(seen.ran.map(r => r.argv.slice(1))).toEqual([['help']])
 })

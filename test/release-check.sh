@@ -41,6 +41,12 @@ grep -q '"license": "Apache-2.0"' plugin/.claude-plugin/plugin.json && head -2 L
 hits="$(tracked -i 'switchyard')"   # the working folder's name, which may change: never shipped
 [ -z "$hits" ] && pass "the local folder name is not hard-coded" || fail "local folder name in shipped files" "$hits"
 
+# every command lives under /relevo; bare /switch or /account would clash with a future built-in.
+# Tests name the old commands on purpose (they check they are gone); CHANGELOG keeps history.
+hits="$(printf '%s\n' "$files" | grep -vE '^(CHANGELOG\.md|test/.*|plugin/hooks/register\.test\.ts|test/release-check\.sh)$' | tr '\n' '\0' \
+  | xargs -0 grep -nIE '(^|[^A-Za-z0-9_.~-])/(switch|account)\b' 2>/dev/null | grep -vE '/relevo (switch|account)')"
+[ -z "$hits" ] && pass "every slash command is under /relevo" || fail "bare /switch or /account in shipped files" "$hits"
+
 hits="$(tracked 'TODO|FIXME|link needed')"
 [ -z "$hits" ] && pass "no TODO, FIXME or 'link needed' left" || fail "unfinished text" "$hits"
 

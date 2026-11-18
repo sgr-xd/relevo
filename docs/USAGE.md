@@ -36,8 +36,8 @@
    and remembers the usage it sees for `relevo list`.
 
 **Coming from a hand-made setup?** If you have a personal `~/.claude/commands/switch.md`,
-delete it after installing. Otherwise `/switch` shows up twice. (The plugin's `/switch` runs
-either way.) Profile folders and `.names` in `~/.claude-profiles` keep working as they are.
+delete it after installing: Relevo's command is `/relevo switch`, and the old one would run
+your old script. Profile folders and `.names` in `~/.claude-profiles` keep working as they are.
 Never rename a profile folder: Claude Code ties the login to the folder's path.
 
 ## Everyday use
@@ -53,21 +53,21 @@ Never rename a profile folder: Claude Code ties the login to the folder's path.
 
 | In a Claude Code session | Does |
 |---|---|
-| `/switch <name>` | Close this session and reopen the same conversation on that account, in this terminal |
-| `/account` | The account list, with this session's account marked |
+| `/relevo switch <name>` | Close this session and reopen the same conversation on that account, in this terminal |
+| `/relevo account` | The account table, with this session's account marked |
 | `/relevo list`, `/relevo install`, … | The CLI commands that are safe inside a session |
 
 None of these slash commands starts a model turn. Their output is for you and is not sent to
 the model.
 
-### How /switch works
+### How /relevo switch works
 
-`relevo <name>` starts Claude Code inside a small wrapper. `/switch bob` checks that `bob` is
+`relevo <name>` starts Claude Code inside a small wrapper. `/relevo switch bob` checks that `bob` is
 signed in, the login hasn't expired, and it isn't at a usage limit. It then leaves a note for
 the wrapper and closes the session the normal way (`/exit`). The wrapper reopens the same
 conversation with `claude --resume <id>` on bob's profile, from the project folder.
 
-- If `bob` is at 100% of a limit, `/switch` shows Claude Code's own line, with the reset time,
+- If `bob` is at 100% of a limit, `/relevo switch` shows Claude Code's own line, with the reset time,
   and asks "Switch anyway?". Nothing happens unless you say so.
 - If `bob`'s login has expired, it says: `Sign in again: relevo bob, then /login`.
 - In a session started with plain `claude`, it can't reopen itself. It prints the command
@@ -78,13 +78,13 @@ conversation with `claude --resume <id>` on bob's profile, from the project fold
 ### When an account stops on its limit
 
 When a turn ends on a rate limit, Relevo posts a notice in the session, plus a desktop
-notification. It says which signed-in account has the most room and gives the exact `/switch`
+notification. It says which signed-in account has the most room and gives the exact `/relevo switch`
 line. It never switches by itself.
 
 ## Limits and caveats
 
 - **macOS and Linux only.** Windows is planned, not built.
-- **Logins last about 30 days** from sign-in. `relevo list`, `/account` and the status line
+- **Logins last about 30 days** from sign-in. `relevo list`, `/relevo account` and the status line
   show the expiry and warn when fewer than 5 days are left (change it with the plugin's
   "Login warning (days)" setting). **We do not know whether using an account extends its
   login**; we have not been able to test it without real logins. To renew: `relevo <name>`,
@@ -92,7 +92,7 @@ line. It never switches by itself.
 - **One conversation, one account at a time.** Opening the same conversation in two accounts at
   once (a second terminal with `claude --resume`, or a second `relevo`) is not detected by
   Claude Code. Both sessions write into the same transcript and the conversation forks: one
-  account's replies silently drop out of it. `/switch` never does this, because it closes the
+  account's replies silently drop out of it. `/relevo switch` never does this, because it closes the
   session before reopening it.
 - **Usage checks start Claude Code** once per account, all at once, from an empty temporary
   folder, with only project settings. So your hooks, plugins and MCP servers don't run for
@@ -111,7 +111,7 @@ line. It never switches by itself.
 |---|---|
 | `~/.claude-profiles/<folder>/` | One profile per account. Its login stays here, written by Claude Code; everything else links to `~/.claude` |
 | `~/.claude-profiles/.names` | `name folder` pairs |
-| `~/.claude-profiles/.switch/` | Short-lived notes from `/switch` to the wrapper |
+| `~/.claude-profiles/.switch/` | Short-lived notes from `/relevo switch` to the wrapper |
 | `~/.claude-profiles/.usage/` | Last-seen usage, live results, login-expiry cache |
 | `~/.claude-profiles/.bin/relevo`, `~/.local/bin/relevo` | The CLI copy and its link (`relevo install`) |
 | `~/.claude-profiles/.prefs` | The plugin's warning-days setting, for the terminal |
@@ -124,7 +124,7 @@ default account. It never calls an Anthropic server itself: login dates come fro
 
 - **`relevo: command not found`**: run `/relevo install` in Claude Code, and check that
   `~/.local/bin` is on your PATH.
-- **`/switch` says the session was not started with relevo**: exit and run the command it
+- **`/relevo switch` says the session was not started with relevo**: exit and run the command it
   printed.
 - **A setting you changed in one account didn't stick**: something replaced that profile's
   shared link with a real file. Run `relevo fix <name>`; it says which item it is.

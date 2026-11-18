@@ -7,25 +7,12 @@
 #
 # Each profile lives in ~/.claude-profiles/<folder> with its own login. Everything else links
 # back to ~/.claude, so settings, plugins, skills, agents, commands, hooks, memory and session
-# history are shared, which is why a conversation can continue on another account.
-# Profiles are called by the part of the account's email before the @ (relevo names).
+# history are shared, which is why a conversation can continue on another account. Profiles
+# are called by the part of the account's email before the @ (relevo names).
 #
-#   relevo add <email> [--sso] [--name <name>]
-#                                add an account: new profile, then Claude Code's own sign-in page
-#   relevo list [--cached]       every account: name, login expiry, and its 5-hour / weekly usage
-#                                (live from Claude Code's /usage; --cached: last seen only)
-#   relevo account               the same, marking the account this session runs on (/account)
-#   relevo statusline            status-line segment: put "relevo statusline" in settings.json
-#   relevo <name> [claude args]  run claude as that account, e.g. relevo jane.doe --resume <id>
-#   relevo run <name> [args]     the same, for a name that matches one of these commands
-#   relevo rename <name> <new>   give an account another name
-#   relevo names                 (re)name every profile from its account email (replaces renames)
-#   relevo new <folder>          add an empty profile without signing in
-#   relevo fix <name>            re-create shared links (if a settings save replaced one)
-#   relevo install               put relevo on your PATH (~/.local/bin/relevo)
-#
-# Inside a session started with relevo, type  /switch <name> : this session closes and the
-# same conversation reopens on that account, in the same terminal.
+# Start Claude Code with `relevo <name>`. Inside that session, `/relevo switch <name>` closes it
+# and reopens the same conversation on the other account, in the same terminal. Usage numbers
+# come only from Claude Code itself (its status line and its /usage command).
 #
 # Never reads or prints credentials. Never touches the default profile's login. A profile's
 # folder is never renamed: Claude Code ties the login to the folder's path.
@@ -39,6 +26,9 @@ SWITCH_DIR="$BASE/.switch"
 BIN_COPY="$BASE/.bin/$PROG"     # stable copy that ~/.local/bin/relevo points to
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 NAME_RE='^[a-z0-9][a-z0-9._-]{0,63}$'
+# The commands /relevo runs inside a Claude Code session, besides `switch` (which the plugin
+# handles itself). plugin/hooks/register.ts allows exactly these; a test keeps the two equal.
+IN_SESSION="account list rename names new fix install help"
 USAGE_DIR="$BASE/.usage"        # <t>.json last-seen status-line usage, <t>.live /usage lines,
                                 # <t>.login login-expiry cache, <t>.limited last rate-limit stop
 PREFS="$BASE/.prefs"            # warn_days=N, written from the plugin's settings at session start
@@ -308,7 +298,7 @@ link_shared() {
   done
 }
 
-# Run claude for a target and stay around: if the session asked to switch (via /switch), reopen
+# Run claude for a target and stay around: if the session asked to switch (/relevo switch), reopen
 # the same conversation on the requested target. Otherwise exit with claude's exit code.
 # The session always closes before it reopens, so it is never open in two profiles at once.
 run_loop() {
@@ -333,7 +323,7 @@ run_loop() {
   done
 }
 
-# Called by /switch from inside a running session (the plugin passes the session's environment).
+# Called by /relevo switch inside a running session (the plugin passes the session's environment).
 # Exit 0: a switch was requested and the caller should close the session now.
 # Exit 3: nothing to do; the printed line says why. Exit 1: an error.
 # Exit 4: that account is at a usage limit; nothing done. The caller may ask the person and
@@ -343,7 +333,7 @@ cmd_switch() {
   while [ $# -gt 0 ]; do
     case "$1" in --anyway) anyway=1 ;; *) [ -z "$want" ] && want="$1" ;; esac; shift
   done
-  [ -n "$want" ] || { echo "usage: /switch <name>   ($PROG list shows the names)"; exit 3; }
+  [ -n "$want" ] || { echo "usage: /$PROG switch <name>   ($PROG list shows the names)"; exit 3; }
   [[ "$want" =~ $NAME_RE ]] || { echo "No account named '$want' ($PROG list shows them)."; exit 3; }
   to="$(resolve "$want")"
   [ -n "$to" ] || { echo "No account named '$want' ($PROG list shows them)."; exit 3; }
@@ -385,7 +375,7 @@ cmd_names() {
     printf '  %-8s → %s\n' "$t" "$n"
   done < <(targets)
   chmod 600 "$tmp" && mv "$tmp" "$NAMES" || die "could not save names"
-  echo "Names saved. Use them with $PROG <name> and /switch <name>."
+  echo "Names saved. Use them with $PROG <name> and /$PROG switch <name>."
 }
 
 cmd_new() {
@@ -591,7 +581,7 @@ cmd_list() {
   return 0
 }
 
-# /account: the list, this session's account marked, and where to continue if it is at a limit.
+# /relevo account: the list, this session's account marked, and where to continue if it is at a limit.
 cmd_account() {
   local cur best
   cur="$(current_target)"
@@ -600,7 +590,7 @@ cmd_account() {
   printf '\nThis session runs on %s.' "$(name_of "$cur")"
   if at_limit "$cur"; then
     best="$(best_other "$cur")"
-    if [ -n "$best" ]; then printf ' It is at a usage limit; to continue this conversation on %s:  /switch %s\n' "$best" "$best"
+    if [ -n "$best" ]; then printf ' It is at a usage limit; to continue this conversation on %s:  /%s switch %s\n' "$best" "$PROG" "$best"
     else printf ' It is at a usage limit, and no other signed-in account has room right now.\n'; fi
   else printf '\n'; fi
 }
@@ -643,7 +633,7 @@ cmd_limited() {
   fi
   line="$(usage_lines "$(resolve "$best")" | head -1)"
   if [ -n "${RELEVO_WRAPPER:-}" ] && [[ "$RELEVO_WRAPPER" =~ ^[0-9]+$ ]] && kill -0 "$RELEVO_WRAPPER" 2>/dev/null; then
-    echo "Usage limit reached on $(name_of "$cur"). To continue this conversation on $best:  /switch $best   ($line)"
+    echo "Usage limit reached on $(name_of "$cur"). To continue this conversation on $best:  /$PROG switch $best   ($line)"
   else
     printf 'Usage limit reached on %s. To continue this conversation on %s, exit, then run:  cd %q && %s %s --resume %s   (%s)\n' \
       "$(name_of "$cur")" "$best" "$dir" "$PROG" "$best" "$sid" "$line"
@@ -679,6 +669,58 @@ cmd_statusline() {
     fi
   fi
   printf '%s\n' "$out"
+}
+
+in_session_line() {  # subcommand -> "usage|what it does" for the help
+  case "$1" in
+    switch)  echo "switch <name>|continue this conversation on another account" ;;
+    account) echo "account|your accounts: login and usage, this session marked" ;;
+    list)    echo "list|the same table, without the mark" ;;
+    rename)  echo "rename <name> <new>|give an account another name" ;;
+    names)   echo "names|name every account after its email" ;;
+    new)     echo "new <folder>|add an empty profile, without signing in" ;;
+    fix)     echo "fix <name>|re-create the shared links" ;;
+    install) echo "install|put relevo on your PATH (~/.local/bin/relevo)" ;;
+    help)    echo "help|this help" ;;
+  esac
+}
+# Two groups: what runs inside Claude Code (as /relevo …) and what needs a terminal. Inside a
+# session (/relevo help), the inside group comes first and the terminal-only lines are short.
+cmd_help() {
+  local s u d
+  if [ "${1:-}" = --more ]; then
+    awk 'NR > 1 && /^#/ { if (/SPDX-License|^# Copyright/) next; sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+    return 0
+  fi
+  inside() {
+    echo "Inside Claude Code"
+    for s in switch $IN_SESSION; do
+      u="$(in_session_line "$s")"; printf '  %-30s %s\n' "/$PROG ${u%%|*}" "${u#*|}"
+    done
+  }
+  echo "Relevo: several Claude accounts, one Claude Code."
+  echo
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    inside
+    echo
+    echo "In a terminal"
+    printf '  %-30s %s\n' "$PROG <name> [claude args]" "(terminal only) start Claude Code as that account" \
+      "$PROG add <email> [--sso]" "(terminal only) add an account with Claude Code's sign-in" \
+      "$PROG run <name> [args]" "(terminal only) like $PROG <name>, for a name that is a command" \
+      "$PROG statusline" "(terminal only) the status-line segment, set in settings.json"
+  else
+    echo "In a terminal"
+    printf '  %-30s %s\n' "$PROG <name> [claude args]" "start Claude Code as that account" \
+      "$PROG run <name> [args]" "the same, for a name that is also a command" \
+      "$PROG add <email> [--sso]" "add an account with Claude Code's own sign-in (--name <n>)" \
+      "$PROG list [--cached]" "accounts, login and usage (--cached: no live check)" \
+      "$PROG statusline" "status-line segment: \"command\": \"$PROG statusline\"" \
+      "$PROG account, rename, names," "new, fix, install, help: as below, without the slash"
+    echo
+    inside
+  fi
+  echo
+  echo "How it works: $PROG help --more, or docs/USAGE.md"
 }
 
 self_path() { local d; d="$(cd -P "$(dirname "$0")" && pwd -P)" && echo "$d/$(basename "$0")"; }
@@ -718,7 +760,8 @@ cmd_sync() {  # at session start: save the plugin's settings; refresh the instal
 
 cmd="${1:-}"
 case "$cmd" in
-  ""|-h|--help|help) awk 'NR > 1 && /^#/ { if (/SPDX-License|^# Copyright/) next; sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
+  ""|-h|--help|help) shift; cmd_help "$@" ;;
+  _in_session) echo "$IN_SESSION" ;;
   _switch) shift; cmd_switch "$@" ;;
   _sync)   cmd_sync ;;
   _limited) cmd_limited ;;

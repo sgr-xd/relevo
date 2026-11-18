@@ -2,6 +2,6 @@
   "name": "relevo",
   "owner": { "name": "sgr-xd" },
   "plugins": [
-    { "name": "relevo", "source": "./plugin", "description": "Named Claude account profiles and in-session /switch" }
+    { "name": "relevo", "source": "./plugin", "description": "Named Claude account profiles and in-session /relevo switch" }
   ]
 }

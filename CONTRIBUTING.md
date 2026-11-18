@@ -29,7 +29,7 @@ welcomes issues and pull requests.
 ## Rules this project keeps
 
 - Never read, print or copy a credential, token or Keychain secret, and never sign in or out on someone's default profile. Tests use a temporary HOME and the fake `claude` in `test/fake/`.
-- Never switch an account on the person's behalf. Relevo suggests; a person runs `/switch`.
+- Never switch an account on the person's behalf. Relevo suggests; a person runs `/relevo switch`.
 - Usage data comes only from Claude Code itself (its status line or its `/usage` command), never from a direct call to an Anthropic endpoint.
 - Every security-relevant behaviour gets a negative test.
 - Few dependencies; justify any new one in the pull request.
