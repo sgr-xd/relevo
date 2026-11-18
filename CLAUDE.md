@@ -1,6 +1,6 @@
-# switchyard — working rules
+# Relevo — working rules
 
-switchyard (working name) is an open-source Claude Code plugin plus a small CLI for people with
+Relevo is an open-source Claude Code plugin plus a small CLI for people with
 several Claude subscription accounts (work, personal, client orgs): named profiles, one-command
 switching, and continuing the same conversation on another account. Read `docs/BRIEF.md` first.
 
@@ -16,7 +16,7 @@ switching, and continuing the same conversation on another account. Read `docs/B
   build "get around usage limits" behaviour — this is multi-account / multi-org profiles.
 - No calls to undocumented Anthropic endpoints. Remaining-limit data comes only from Claude Code's
   own status-line `rate_limits` input.
-- Name: "Claude" must not be part of the product name (Anthropic trademark). The working name
+- Name: Relevo (Spanish for relay handoff). "Claude" must never be part of the product name (Anthropic trademark). The name
   lives in one place so a rename is cheap.
 
 ## Engineering

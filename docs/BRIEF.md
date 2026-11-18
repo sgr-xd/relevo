@@ -1,4 +1,4 @@
-# switchyard brief
+# Relevo brief
 
 ## Problem
 
@@ -52,3 +52,7 @@ Further milestones are defined from D0 after review.
 
 After each milestone: commit on the branch, then SendMessage to the Claude session named
 `innovation`: branch, commit, what was verified and how, gaps, questions. Wait for review.
+
+## Name
+
+**Relevo** — Spanish for a relay handoff / changing of the guard: another account takes over and carries on the same conversation. Command: `relevo`. The local folder is still named `switchyard` until the owner renames it; never hard-code the folder name.
