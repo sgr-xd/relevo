@@ -33,5 +33,11 @@ switching, and continuing the same conversation on another account. Read `docs/B
 
 - Identity and push credentials are configured repo-locally; do not change git config.
 - Milestone branches `r<N>-<slug>`; merge to `main` only after the orchestrator approves.
-- No GitHub remote yet — commit locally, do not create repos or push.
+- Remote: `github.com/sgr-xd/relevo` (HTTPS, the repo-local credential helper pushes as sgr-xd;
+  never `gh auth switch`). Push only when the owner asks.
+- `main` takes changes only through a pull request with CI green, squash-merged, linear
+  history: no direct or force pushes, no deleting or moving `v*` tags. A GitHub ruleset
+  enforces this once the repo is public (the free plan has no rulesets on private repos);
+  follow it either way.
+- Before the repo goes public or a release is cut: `test/release-check.sh` (docs/RELEASE.md).
 - End commit messages with: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
