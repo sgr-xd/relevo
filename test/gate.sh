@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The Relevo authors
 # The release gate. Each step's exit code is checked on its own (no set -e).
 #   test/gate.sh            CLAUDE_BIN=<path> picks the claude used for plugin checks (default: claude)
 # Linux runs in a debian:12-slim container when Docker is up; otherwise that step says SKIPPED.

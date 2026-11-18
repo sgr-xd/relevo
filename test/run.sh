@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The Relevo authors
 # Relevo CLI tests. Each test gets a fresh temp HOME and a fake `claude` (test/fake/claude) first
 # on PATH; nothing touches the real ~/.claude, a real login or the network.
 #   test/run.sh [bash]    run the CLI under that bash (default /bin/bash: 3.2 on macOS)
@@ -300,6 +302,16 @@ usage "$H/.claude" "Current session: 12% used"; echo 1 > "$H/.claude/fake-usage-
 out="$(r list)"
 check "says so" has "$out" "ran a model turn, which it never should"
 check "and does not show it" hasnt "$out" "Current session: 12% used"
+cleanup
+
+setup "usage: noisy output"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+usage "$H/.claude" "Current session: 12% used · resets 3pm\nCurrent week (all models): 40% used"; : > "$H/.claude/fake-usage-noisy"
+out="$(r list)"
+check "raw control characters inside the JSON string are tolerated" has "$out" "Current week (all models): 40% used"
+check "the first line survives its raw escape" line "$out" '^ +Current session: 12% used · resets 3pm$'
+check "stderr is never mixed into what is parsed or shown" hasnt "$out" "slow start"
+check "no control characters reach the output" bash -c "! printf '%s' \"\$1\" | LC_ALL=C grep -q \"\$(printf '[\\033\\r]')\"" _ "$out"
 cleanup
 
 setup "status line"

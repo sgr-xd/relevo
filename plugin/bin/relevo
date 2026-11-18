@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The Relevo authors
 # relevo — run Claude Code as one of several accounts (work, personal, client orgs) and move a
 # conversation from one account to another, the way Claude Code's docs describe multiple
 # accounts: one CLAUDE_CONFIG_DIR per account.
@@ -97,7 +99,7 @@ targets() { echo main; [ -d "$BASE" ] && for d in "$BASE"/*/; do [ -d "$d" ] && 
 
 # --- login status, from `claude auth status --json` (no secrets in it; nothing else is read) ---
 # Sets LOGIN (in|out|unknown), EXP_DATE (YYYY-MM-DD or empty), EXP_LEFT (seconds or empty), EMAIL.
-json_str() { printf '%s' "$2" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"; }
+json_str() { printf '%s' "$2" | LC_ALL=C sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"; }
 iso_epoch() {  # 2026-12-16T05:00:00.000Z -> epoch seconds (BSD and GNU date)
   local s="${1%%.*}"; s="${s%Z}"; s="${s%+00:00}"
   date -u -j -f '%Y-%m-%dT%H:%M:%S' "$s" +%s 2>/dev/null || date -u -d "${s}Z" +%s 2>/dev/null
@@ -112,7 +114,7 @@ login_state() {
 read_login() {
   local j exp
   LOGIN=unknown EXP_DATE="" EXP_LEFT="" EXP_EPOCH="" EMAIL=""
-  j="$(cfg_env "$1" claude auth status --json 2>/dev/null | tr -d '\n')"
+  j="$(cfg_env "$1" claude auth status --json 2>/dev/null | one_line)"
   [ -n "$j" ] || return 0
   if printf '%s' "$j" | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*true'; then LOGIN=in
   elif printf '%s' "$j" | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*false'; then LOGIN=out; return 0
@@ -186,13 +188,16 @@ make_profile() {  # folder: create it with the shared links
 # Live: Claude Code's own /usage command, headless (no model call). Run from an empty temp folder
 # with only project settings, so the shared ~/.claude settings' hooks, plugins and MCP servers
 # do not start for it. Fallback: what the status line last saw (relevo statusline).
-json_obj() {  # key json -> inner text of "key": { … } (flat objects only)
-  printf '%s' "$2" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*{\([^{}]*\)}.*/\1/p" | head -1
+one_line() {  # stdin -> one line without terminal escapes or control characters, even raw
+  LC_ALL=C sed "s/$(printf '\033')\[[0-9;?]*[A-Za-z]//g" | LC_ALL=C tr -d '\000-\010\013-\037' | tr -d '\n'
 }
-json_num() { printf '%s' "$2" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9][0-9.eE+-]*\).*/\1/p" | head -1; }
+json_obj() {  # key json -> inner text of "key": { … } (flat objects only)
+  printf '%s' "$2" | LC_ALL=C sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*{\([^{}]*\)}.*/\1/p" | head -1
+}
+json_num() { printf '%s' "$2" | LC_ALL=C sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9][0-9.eE+-]*\).*/\1/p" | head -1; }
 json_result() {  # the "result" string of a claude -p JSON answer, unescaped
   local raw
-  raw="$(printf '%s' "$1" | sed -nE 's/.*"result"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' | head -1)"
+  raw="$(printf '%s' "$1" | LC_ALL=C sed -nE 's/.*"result"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' | head -1)"
   printf '%b' "$(printf '%s' "$raw" | sed 's/\\"/"/g')"
 }
 window() {  # inner text of a rate_limits window -> W_PCT (whole %) and W_RESET (epoch), or empty
@@ -216,7 +221,7 @@ live_fresh() {  # target: a /usage result younger than LIVE_TTL exists
 }
 store_live() {  # target, claude -p output file
   local j turns lines
-  j="$(tr -d '\n' < "$2")"
+  j="$(one_line < "$2")"   # stdout only: fetch_live never mixes stderr into it
   printf '%s' "$j" | grep -q '"subtype"[[:space:]]*:[[:space:]]*"success"' || return 0
   turns="$(json_num num_turns "$j")"
   if [ -n "$turns" ] && [ "$turns" != 0 ]; then
@@ -566,7 +571,7 @@ cmd_limited() {
 # Reads only the JSON Claude Code passes on stdin; remembers the usage for relevo list.
 cmd_statusline() {
   local in t name five seven model out now c e days
-  in="$(tr -d '\n')"; now=$(date +%s)
+  in="$(one_line)"; now=$(date +%s)
   t="$(current_target "$(json_str transcript_path "$in")")"
   if [ -n "$t" ]; then name="$(name_of "$t")"; else name="$(basename "${CLAUDE_CONFIG_DIR:-claude}")"; fi
   five="$(json_obj five_hour "$in")"; seven="$(json_obj seven_day "$in")"
@@ -630,7 +635,7 @@ cmd_sync() {  # at session start: save the plugin's settings; refresh the instal
 
 cmd="${1:-}"
 case "$cmd" in
-  ""|-h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
+  ""|-h|--help|help) awk 'NR > 1 && /^#/ { if (/SPDX-License|^# Copyright/) next; sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
   _switch) shift; cmd_switch "$@" ;;
   _sync)   cmd_sync ;;
   _limited) cmd_limited ;;

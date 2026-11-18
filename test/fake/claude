@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The Relevo authors
 # Fake `claude` for tests. Never contacts anything and holds no secrets.
 #   auth status --json   prints status from <config dir>/fake-auth ("<email> <expiry ISO>", "out" or "garbage")
 #   auth login ...       logs its arguments; signs in as $FAKE_LOGIN_AS (or the --email given)
@@ -44,6 +46,10 @@ if [ "${1:-}" = -p ] && [ "${2:-}" = /usage ]; then
   turns="$(cat "$cfgdir/fake-usage-turns" 2>/dev/null || echo 0)"
   res="$(cat "$cfgdir/fake-usage" 2>/dev/null || printf 'Total cost: $0.00\nUsage:')"
   esc="$(printf '%s\n' "$res" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN { ORS = "\\n" } { print }')"
+  if [ -f "$cfgdir/fake-usage-noisy" ]; then   # warnings on stderr; raw ESC and CR inside the string
+    printf 'Warning: \033[33mslow start\033[0m\n{"type":"noise"}\n' >&2
+    esc="$(printf '\033[1m')${esc}$(printf '\r')"
+  fi
   printf '{"type":"result","subtype":"success","is_error":false,"num_turns":%s,"result":"%s","total_cost_usd":0}\n' \
     "$turns" "${esc%\\n}"
   log "usage-done cfg=${CLAUDE_CONFIG_DIR-UNSET}"

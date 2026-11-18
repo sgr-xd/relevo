@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The Relevo authors
 // Spike-only fake Messages API on 127.0.0.1. Never forwards anywhere.
 // MODE file (re-read per request): ok | slow | 429 | bash:<command>
 import http from 'node:http';

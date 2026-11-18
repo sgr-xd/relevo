@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The Relevo authors
 # Spike hook: records event input plus a few env facts. Never prints credentials:
 # only names of env vars, plus CLAUDE_CONFIG_DIR / RELEVO_PROFILE values.
 in=$(cat); printf "%s" "$in" > "$SPIKE_DIR/last-$1.json"; exec 2>>"$SPIKE_DIR/hook-stderr.txt"

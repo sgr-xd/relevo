@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The Relevo authors
 import type { EngineInterface, Register } from 'claude-code'
 
 // Slash commands for the relevo CLI that answer by themselves, without a model turn, and a

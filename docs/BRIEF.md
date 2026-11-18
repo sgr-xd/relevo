@@ -1,5 +1,7 @@
 # Relevo brief
 
+> Historical: the brief D0 started from. What was built and why is in [DESIGN.md](DESIGN.md).
+
 ## Problem
 
 People with more than one Claude subscription account (work + personal, several client orgs)

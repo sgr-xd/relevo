@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The Relevo authors
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 

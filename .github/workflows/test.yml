@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# CLI tests on Linux (bash 5, GNU coreutils) and macOS (its own bash 3.2). The plugin checks
+# (claude plugin validate / test) need Claude Code and run locally through test/gate.sh.
+name: test
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: CLI tests with the system bash
+        run: test/run.sh /bin/bash
