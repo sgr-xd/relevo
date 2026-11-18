@@ -154,7 +154,7 @@ check "unknown name" has "$L" "switch-exit=3 out=No account named 'nobody'"
 check "same account" has "$L" "switch-exit=3 out=Already on jane."
 check "signed-out account" has "$L" "switch-exit=3 out=nologin is not signed in. Sign in again: relevo nologin, then /login"
 check "expired login" has "$L" "switch-exit=3 out=old is not signed in (login expired $(in_days -1 | cut -c1-10)). Sign in again: relevo old, then /login"
-check "no name" has "$L" "switch-exit=3 out=usage: /switch <name>"
+check "no name" has "$L" "switch-exit=3 out=usage: /relevo switch <name>"
 check "path in name" has "$L" "switch-exit=3 out=No account named 'a/b'"
 check "no session reopened after a refusal" [ "$(grep -c '^run ' "$T/claude.log")" = 6 ]
 check "no request left behind" [ -z "$(ls -A "$B/.switch")" ]
@@ -242,9 +242,24 @@ out="$(r install)"; check "never overwrites someone else's file" has "$out" "alr
 cleanup
 
 setup "help"
-out="$(r help)"
-check "help lists the commands" has "$out" "relevo add <email> [--sso] [--name <name>]"
-check "help mentions /switch" has "$out" "/switch <name>"
+out="$(r help)"; ins="$(EXTRA=CLAUDE_CODE_SESSION_ID=$SID r help)"
+group() { printf '%s\n' "$1" | awk -v h="$2" '$0 == h { on = 1; next } on && /^$/ { exit } on'; }
+words() { group "$1" "Inside Claude Code" | awk '{ print $2 }' | sort | tr '\n' ' '; }
+want="$(printf '%s\n' switch $(r _in_session) | sort | tr '\n' ' ')"
+check "terminal help: every in-session command, and nothing else, in the Inside group" [ "$(words "$out")" = "$want" ]
+check "session help: the same list" [ "$(words "$ins")" = "$want" ]
+mod="$(sed -n "s/^const IN_SESSION = \[\(.*\)\]$/\1/p" "$ROOT/plugin/hooks/register.ts" | tr -d "' " | tr ',' ' ')"
+check "the plugin allows exactly the CLI's in-session list (no drift)" [ "$mod" = "$(r _in_session)" ]
+check "inside commands are written /relevo <subcommand>" bash -c "! printf '%s\n' \"\$1\" | grep -vE '^  /relevo [a-z]'" _ "$(group "$out" "Inside Claude Code")"
+check "switch comes first" [ "$(group "$out" "Inside Claude Code" | head -1 | awk '{ print $2 }')" = switch ]
+check "terminal help lists add, run, <name> and statusline" bash -c 't=$(printf "%s\n" "$1" | awk "/^In a terminal/{on=1;next} on&&/^$/{exit} on"); for c in "relevo add" "relevo run" "relevo <name>" "relevo statusline"; do printf "%s" "$t" | grep -qF "$c" || exit 1; done' _ "$out"
+check "in a session, the Inside group comes first" [ "$(printf '%s\n' "$ins" | grep -nE '^(Inside Claude Code|In a terminal)$' | head -1 | cut -d: -f2)" = "Inside Claude Code" ]
+check "in a session, every terminal line says (terminal only)" bash -c '! printf "%s\n" "$1" | grep -v "(terminal only)" | grep -q .' _ "$(group "$ins" "In a terminal")"
+check "one screen: 25 lines at most, in a terminal" [ "$(printf '%s\n' "$out" | wc -l)" -le 25 ]
+check "one screen: 25 lines at most, in a session" [ "$(printf '%s\n' "$ins" | wc -l)" -le 25 ]
+more="$(r help --more)"
+check "help --more explains how it works" has "$more" "Inside that session, \`/relevo switch <name>\` closes it"
+check "no bare /switch or /account anywhere in the help" bash -c '! printf "%s\n" "$1" | grep -qE "(^|[^a-z])/(switch|account)"' _ "$out$ins$more"
 cleanup
 
 # --- R2: usage, status line, limits ------------------------------------------------------------
@@ -265,8 +280,8 @@ r names > /dev/null
 usage "$H/.claude" "Current session: 12% used · resets 3pm (Europe/Paris)\nCurrent week (all models): 40% used · resets Nov 22 at 6:30am\nLast 24h: 3 sessions, 2% used\nTop model: Opus 50% used\nEstimated cost: \$0"
 usage "$B/acc2" "Current session: 100% used · resets 4pm (Europe/Paris)\nCurrent week (all models): 71% used · resets Nov 22"
 usage "$B/acc3" "  Current session: 5% used · resets 5pm\n  Current week (\"Fable\"): 9% used"
-for d in "$H/.claude" "$B/acc2" "$B/acc3"; do echo 2 > "$d/fake-usage-delay"; done
-start=$SECONDS; out="$(r list)"; took=$(( SECONDS - start ))
+echo 3 > "$H/fake-barrier"   # the three checks must be running at the same time to get through
+out="$(EXTRA=RELEVO_USAGE_TIMEOUT=30 r list)"; rm -rf "$H/fake-barrier" "$H/fake-barrier.d"
 check "a bar and percent per window" line "$out" '^   jane +20d +██████████ 100% +███████░░░  71% '
 check "columns: 5-hour, all-models week, then the rest" line "$out" '^   Account +Login +5-hour +Week, all models +Week, "Fable" +Resets$'
 check "Resets shows the fullest window, without the time zone" line "$out" '^   me .*Nov 22 6:30am$'
@@ -276,7 +291,8 @@ check "the full row ends with its mark" line "$out" '^   jane .* 4pm  ⛔$'
 check "'Last …' and 'Top …' lines are dropped" hasnt "$out" "Top model"
 check "escaped quotes come through" line "$out" '^   bob .*█░░░░░░░░░   9%'
 check "no check for a signed-out account" [ "$(calls "$B/acc4")" = 0 ]
-check "checks run in parallel (3 × 2 s in under 5 s)" [ "$took" -lt 5 ]
+check "checks run in parallel: all three were running at once" [ "$(grep -c '^usage-barrier met' "$T/claude.log")" = 3 ]
+check "and none ran alone" hasnt "$(log)" "usage-barrier alone"
 check "main is checked with CLAUDE_CONFIG_DIR unset" [ "$(calls UNSET)" = 1 ]
 check "checks skip shared hooks, plugins and MCP servers" has "$(log)" "args=--output-format json --no-session-persistence --setting-sources project --strict-mcp-config"
 check "checks run in an empty temp folder, not the project" hasnt "$(grep '^usage ' "$T/claude.log")" "pwd=$T/proj"
@@ -403,7 +419,7 @@ usage "$B/acc3" "Current session: 30% used · resets 5pm"
 usage "$B/acc5" "Current session: 100% used"
 ENVS="RELEVO_PROFILE=acc2 CLAUDE_CODE_SESSION_ID=$SID CLAUDE_PROJECT_DIR=$T/proj"
 out="$(EXTRA="$ENVS RELEVO_WRAPPER=$$" r _limited)"
-check "suggests the account with the most room" [ "$out" = "Usage limit reached on jane. To continue this conversation on bob:  /switch bob   (Current session: 30% used · resets 5pm)" ]
+check "suggests the account with the most room" [ "$out" = "Usage limit reached on jane. To continue this conversation on bob:  /relevo switch bob   (Current session: 30% used · resets 5pm)" ]
 check "records the stop" [ -f "$B/.usage/acc2.limited" ]
 check "never switches by itself" no_request
 out="$(EXTRA="$ENVS" r _limited)"
@@ -423,7 +439,7 @@ out="$(EXTRA=RELEVO_PROFILE=acc2 r account)"
 check "marks this session's account" line "$out" '^ ▶ jane +20d'
 check "the others are not marked" line "$out" '^   bob +20d'
 check "the title says what the mark means" [ "$(printf '%s\n' "$out" | head -1)" = "Accounts   ▶ this session" ]
-check "says where to continue when at a limit" has "$out" "This session runs on jane. It is at a usage limit; to continue this conversation on bob:  /switch bob"
+check "says where to continue when at a limit" has "$out" "This session runs on jane. It is at a usage limit; to continue this conversation on bob:  /relevo switch bob"
 usage "$B/acc2" "Current session: 10% used"; rm -f "$B/.usage/"*.live
 out="$(EXTRA=RELEVO_PROFILE=acc2 r account)"
 check "no suggestion when there is room" [ "$(printf '%s\n' "$out" | tail -1)" = "This session runs on jane." ]

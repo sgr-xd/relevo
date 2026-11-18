@@ -6,7 +6,7 @@
 #   auth login ...       logs its arguments; signs in as $FAKE_LOGIN_AS (or the --email given)
 #                        unless FAKE_LOGIN_FAIL=1
 #   anything else        a "session": logs how it was started, then runs the next line of $FAKE_PLAN:
-#                          switch <name>   what /switch does (relevo _switch with the session's env)
+#                          switch <name>   what /relevo switch does (relevo _switch with the session's env)
 #                          inject <text>   writes <text> as this wrapper's switch request (tamper test)
 #                          exit <code>     ends with that code
 cfgdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -43,6 +43,13 @@ esac
 if [ "${1:-}" = -p ] && [ "${2:-}" = /usage ]; then
   log "usage cfg=${CLAUDE_CONFIG_DIR-UNSET} pwd=$PWD args=${*:3}"
   d="$(cat "$cfgdir/fake-usage-delay" 2>/dev/null)"; [ -n "$d" ] && sleep "$d"
+  # Barrier ($HOME/fake-barrier holds N): wait until N checks are running at once. Only checks
+  # that really overlap get through ("met"); one running alone gives up after 20 s ("alone").
+  if [ -f "$HOME/fake-barrier" ]; then
+    n="$(cat "$HOME/fake-barrier")"; mkdir -p "$HOME/fake-barrier.d"; : > "$HOME/fake-barrier.d/$$"
+    i=0; while [ "$(ls "$HOME/fake-barrier.d" | wc -l)" -lt "$n" ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+    if [ $i -lt 200 ]; then log "usage-barrier met cfg=${CLAUDE_CONFIG_DIR-UNSET}"; else log "usage-barrier alone"; fi
+  fi
   turns="$(cat "$cfgdir/fake-usage-turns" 2>/dev/null || echo 0)"
   res="$(cat "$cfgdir/fake-usage" 2>/dev/null || printf 'Total cost: $0.00\nUsage:')"
   esc="$(printf '%s\n' "$res" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN { ORS = "\\n" } { print }')"

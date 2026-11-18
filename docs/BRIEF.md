@@ -15,7 +15,7 @@ must log out and sign in again to switch, losing their place in the conversation
    account.
 2. **CLI**: `add <name>`, `list`, `remove <name>`, `run <name> [--resume <session-id>] [-- claude args]`,
    `status` (last-seen remaining 5-hour / weekly % per profile), `doctor`.
-3. **Plugin**: `/account` (active profile + every profile's last-seen %, and the exact command to
+3. **Plugin**: `/relevo account` (active profile + every profile's last-seen %, and the exact command to
    continue this conversation on another profile); a status-line segment; a `StopFailure` hook
    (matcher `rate_limit`) that records the event and notifies — it never switches by itself.
 
@@ -38,7 +38,7 @@ must log out and sign in again to switch, losing their place in the conversation
 - How links behave on Windows (junctions vs symlinks vs copies) and on plugin updates.
 - Whether shared `projects/` is safe if the SAME session is resumed in two profiles at once
   (must be prevented or detected).
-- What `/account` can know about the running session's profile and session id.
+- What `/relevo account` can know about the running session's profile and session id.
 - An independent existence check of competing tools is running in the orchestrator; if it finds
   this already exists natively in Claude Code, the project stops.
 
