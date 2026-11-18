@@ -57,4 +57,4 @@ After each milestone: commit on the branch, then SendMessage to the Claude sessi
 
 ## Name
 
-**Relevo** — Spanish for a relay handoff / changing of the guard: another account takes over and carries on the same conversation. Command: `relevo`. The local folder is still named `switchyard` until the owner renames it; never hard-code the folder name.
+**Relevo** — Spanish for a relay handoff / changing of the guard: another account takes over and carries on the same conversation. Command: `relevo`. Never hard-code the local folder name: it may change.

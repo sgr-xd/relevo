@@ -61,22 +61,26 @@ The rest of setup, every command and the status line are in [docs/USAGE.md](docs
 
 ## How it compares
 
-All four are open source. Facts are from each project's own README on 2026-11-18.
+All four are open source. Facts come from each project's own README and GitHub on 2026-11-18.
 
-| | **Relevo** | [claude-swap](https://github.com/realiti4/claude-swap) | [ccs](https://github.com/kaitranntt/ccs) | hatswap |
+| | **Relevo** | [claude-swap](https://github.com/realiti4/claude-swap) | [ccs](https://github.com/kaitranntt/ccs) | [hatswap](https://github.com/orvi2014/hatswap) |
 |---|---|---|---|---|
-| How accounts are kept apart | One `CLAUDE_CONFIG_DIR` folder per account, as Claude Code's docs suggest; logins never move | Copies the account's login into place on each switch (Keychain or credential files) and keeps backups of every login | Separate account folders by default (mechanism not described) | link needed |
-| Shared history, `--resume` across accounts | Yes | Yes (default) | Opt-in "shared context groups" | link needed |
-| Move a running conversation to another account | `/switch <name>` in the session; it reopens in the same terminal | `cswap switch` in any terminal; the running session picks up the new login | Not stated | link needed |
-| Automatic switching | Never | Yes: `cswap auto` switches at a usage threshold (default 90%) | Not stated | link needed |
-| Usage source | Claude Code's status line and its `/usage` command | "The usage endpoint" (not named); optional probe request | Not stated | link needed |
-| Other providers | No | No | Yes: Gemini, Copilot, OpenRouter via a proxy | link needed |
-| Platforms | macOS, Linux | macOS, Linux/WSL, Windows | macOS, Linux, Windows | link needed |
-| Needs | bash | Python 3.12+ | npm | link needed |
+| Size and age | New; not yet published | 4,790 stars; since Jan 2026; last push Nov 15 | 2,907 stars; since Nov 2025; last push Nov 16 | 1 star, 28 commits; since Oct 11 2026; last push Oct 21 |
+| How accounts are kept apart | One `CLAUDE_CONFIG_DIR` folder per account, as Claude Code's docs suggest. Logins never move | Copies the account's login into place on each switch (Keychain or credential files) and keeps backups of every login | Separate account folders by default (mechanism not described) | One `CLAUDE_CONFIG_DIR` folder per account. "No credentials are read, copied or modified" |
+| Shared history, `--resume` across accounts | Yes | Yes (default) | Opt-in "shared context groups" | Yes (default); an account can keep its own private history |
+| Move a running conversation to another account | `/switch <name>` in the session; it reopens in the same terminal | `cswap switch` in any terminal; the running session picks up the new login | Not stated | `/switch` or `/handoff` in the session (after `hatswap install-command`); restarts Claude Code |
+| Automatic switching | Never | Yes: `cswap auto` switches at a usage threshold (default 90%) | Not stated | Never |
+| Usage source | Claude Code's status line, and its `/usage` command | "The usage endpoint" (not named); optional probe request | Not stated | "The same endpoint Claude's `/usage` reads"; its README says this is not a public API |
+| Other providers | No | No | Yes: Gemini, Copilot and OpenRouter, through a proxy | OpenAI Codex |
+| Platforms | macOS, Linux | macOS, Linux/WSL, Windows | macOS, Linux, Windows | macOS, Linux |
+| Needs | bash | Python 3.12+ | npm | Python 3, bash 3.2+ |
 
-Pick claude-swap if you need Windows or automatic switching. Pick ccs if you also route to other
-providers. Pick Relevo if you want each login to stay put, no automatic switching, and an
-in-session `/switch` that continues the same conversation.
+Pick claude-swap if you need Windows or automatic switching, or ccs if you also route to other
+providers. hatswap is closest to Relevo's design (a folder per account, an in-session `/switch`,
+no automatic switching). It adds Codex and private per-account history, and it reads usage
+from the endpoint behind `/usage` instead of running `/usage`. Pick Relevo if you want usage
+only from Claude Code's own commands, a `/switch` that asks before moving to a full account,
+and no model turn for any of its commands.
 
 ## License
 

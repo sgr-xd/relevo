@@ -38,6 +38,9 @@ done
 grep -q '"license": "Apache-2.0"' plugin/.claude-plugin/plugin.json && head -2 LICENSE | grep -q 'Apache License' \
   && pass "LICENSE and plugin.json agree (Apache-2.0)" || fail "license mismatch"
 
+hits="$(tracked -i 'switchyard')"   # the working folder's name, which may change: never shipped
+[ -z "$hits" ] && pass "the local folder name is not hard-coded" || fail "local folder name in shipped files" "$hits"
+
 hits="$(tracked 'TODO|FIXME|link needed')"
 [ -z "$hits" ] && pass "no TODO, FIXME or 'link needed' left" || fail "unfinished text" "$hits"
 
