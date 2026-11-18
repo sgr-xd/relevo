@@ -22,6 +22,18 @@ macOS and Linux only for v0.1.
 | Login expiry | From `loginExpiresAt` in `claude auth status --json`, with a warning under `warn_days` (plugin option, default 5). `/switch` to a signed-out or expired profile is refused. Whether using a profile extends its expiry is **unknown** (not testable without real logins). | tests |
 | New profile folders | Neutral `acc<N>` names, because a folder can never be renamed (the login is tied to its path). Names live in `.names` and can change freely. | — |
 
+## R2 decisions
+
+| Question | Decision | Evidence |
+|---|---|---|
+| Live usage | `claude -p "/usage" --output-format json --no-session-persistence`, run per account in parallel, each stopped after 20 s (`RELEVO_USAGE_TIMEOUT`). Results are reused for 60 s. Kept: lines containing `% used`, except those starting `Last ` or `Top `. A result with `num_turns > 0` is flagged and not used. Allowed by the amended working rule (owner, 2026-11-18). | CLI tests: parallel (3 × 2 s in under 5 s), timeout, cache, model-turn guard |
+| Hook noise from the checks | Run from an empty temp folder with `--setting-sources project --strict-mcp-config`, so the shared settings' hooks, plugins and MCP servers do not start. | throwaway profile: SessionStart/SessionEnd stopped firing, about 1.0 s down to 0.8 s. **Not verified:** that OAuth `/usage` still answers with these flags (needs a real login) |
+| Fallback | `relevo statusline` writes `~/.claude-profiles/.usage/<target>.json` (0600, atomic), in the same shape the prototype's status line used | status-line tests |
+| Status-line segment | `"statusLine": {"type": "command", "command": "relevo statusline"}`. A plugin cannot set it. Shows `name · 5h N% · 7d N% · model`, plus a login warning under `warn_days`. The profile comes from `RELEVO_PROFILE`, else `CLAUDE_CONFIG_DIR`, else `transcript_path` (for scrubbed environments). Login expiry comes from a cache refreshed in the background every 6 h, so a refresh never starts claude in the foreground. | pty: `jane · Opus 5.5` from real input |
+| 100% on /switch | `_switch` checks the target (live, or last seen if no live answer). At a limit it exits 4 with Claude Code's own line, reset time included. The mod then asks "Switch anyway?" (`$.ui.ask`). Stay, a closed question, or `-p` all mean no switch. | module + CLI tests |
+| Rate-limit stop | The mod hooks `classic.StopFailure` (`error: rate_limit`) and runs `relevo _limited`. That records the stop and names the signed-in account with the most room. The suggestion goes out as a transcript notice (`$.ui.log`, not sent to the model) and a notification (`$.ui.notify`). Never switches. | pty with a fake 429: notice shown. The notification itself was not observed |
+| Plugin settings in the terminal | `_sync` at session start writes `warn_days` to `~/.claude-profiles/.prefs`, which the terminal CLI and status line read | CLI test |
+
 ## D0 findings (kept for reference)
 
 ## How the spikes ran

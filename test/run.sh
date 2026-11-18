@@ -14,6 +14,8 @@ check() {  # description, then a command that must succeed
   if "$@"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); FAILED="$FAILED\n  ✘ $CASE: $d"; fi
 }
 has()   { printf '%s' "$1" | grep -qF -- "$2"; }
+line()  { printf '%s\n' "$1" | grep -qE -- "$2"; }                         # some line matches the regex
+lines_with() { printf '%s\n' "$1" | grep -F -- "$2"; }                    # the lines containing text
 hasnt() { ! printf '%s' "$1" | grep -qF -- "$2"; }
 
 epoch_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%S.000Z; }
@@ -59,15 +61,15 @@ profile acc4 "old@client.example $(in_days -2)"
 profile acc5 "garbage"
 r names > /dev/null
 out="$(r list)"
-check "main is listed by its name, signed in" bash -c "printf '%s\\n' '$out' | grep -qE '^me +\\(main\\) +signed in · login expires in 20 days'"
+check "main is listed by its name, signed in" line "$out" '^me +\(main\) +signed in · login expires in 20 days'
 check "expiry shown as days and date" has "$out" "login expires in 20 days ($(in_days 20 | cut -c1-10))"
 check "under 5 days is flagged" has "$out" "login expires in 3 days ($(in_days 3 | cut -c1-10))  ← sign in again soon"
-check "20 days is not flagged" bash -c "printf '%s' '$out' | grep 'in 20 days' | grep -vqF 'sign in again soon'"
+check "20 days is not flagged" hasnt "$(lines_with "$out" 'in 20 days')" "sign in again soon"
 check "signed-out profile" has "$out" "NOT signed in"
 check "expired login says how to sign in again" has "$out" "login expired $(in_days -2 | cut -c1-10)  ← sign in again: relevo old, then /login"
 check "unreadable status" has "$out" "status unknown"
 out="$(EXTRA=RELEVO_WARN_DAYS=25 r list)"
-check "warning threshold is configurable" bash -c "printf '%s' '$out' | grep 'in 20 days' | grep -qF 'sign in again soon'"
+check "warning threshold is configurable" has "$(lines_with "$out" 'in 20 days')" "sign in again soon"
 cleanup
 
 setup "names"
@@ -234,6 +236,173 @@ setup "help"
 out="$(r help)"
 check "help lists the commands" has "$out" "relevo add <email> [--sso] [--name <name>]"
 check "help mentions /switch" has "$out" "/switch <name>"
+cleanup
+
+# --- R2: usage, status line, limits ------------------------------------------------------------
+usage() { printf '%b\n' "$2" > "$1/fake-usage"; }               # dir, lines (\n-separated)
+calls() { grep -c "^usage cfg=$1 " "$T/claude.log"; }           # how many /usage checks ran for a cfg
+seen_json() {  # dir-target, 5h %, 5h reset in seconds from now, 7d %, 7d reset, seen seconds ago
+  local now; now=$(date +%s); mkdir -p "$B/.usage"
+  printf '{"seen": %s, "five_hour": {"used_percentage": %s, "resets_at": %s}, "seven_day": {"used_percentage": %s, "resets_at": %s}}\n' \
+    $(( now - $6 )) "$2" $(( now + $3 )) "$4" $(( now + $5 )) > "$B/.usage/$1.json"
+}
+
+setup "usage: live"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+profile acc2 "jane@work.example $(in_days 20)"
+profile acc3 "bob@client.example $(in_days 20)"
+profile acc4 "out"
+r names > /dev/null
+usage "$H/.claude" "Current session: 12% used · resets 3pm (Europe/Paris)\nCurrent week (all models): 40% used · resets Nov 22 at 6:30am\nLast 24h: 3 sessions, 2% used\nTop model: Opus 50% used\nEstimated cost: \$0"
+usage "$B/acc2" "Current session: 100% used · resets 4pm (Europe/Paris)\nCurrent week (all models): 71% used · resets Nov 22"
+usage "$B/acc3" "  Current session: 5% used · resets 5pm\n  Current week (\"Fable\"): 9% used"
+for d in "$H/.claude" "$B/acc2" "$B/acc3"; do echo 2 > "$d/fake-usage-delay"; done
+start=$SECONDS; out="$(r list)"; took=$(( SECONDS - start ))
+check "live lines under each signed-in account" has "$out" "Current week (all models): 71% used · resets Nov 22"
+check "indented under the account" line "$out" '^ {30,}Current session: 12% used · resets 3pm \(Europe/Paris\)$'
+check "'Last …' and 'Top …' lines are dropped" hasnt "$out" "Top model"
+check "escaped quotes come through" has "$out" 'Current week ("Fable"): 9% used'
+check "no check for a signed-out account" [ "$(calls "$B/acc4")" = 0 ]
+check "checks run in parallel (3 × 2 s in under 5 s)" [ "$took" -lt 5 ]
+check "main is checked with CLAUDE_CONFIG_DIR unset" [ "$(calls UNSET)" = 1 ]
+check "checks skip shared hooks, plugins and MCP servers" has "$(log)" "args=--output-format json --no-session-persistence --setting-sources project --strict-mcp-config"
+check "checks run in an empty temp folder, not the project" hasnt "$(grep '^usage ' "$T/claude.log")" "pwd=$T/proj"
+r list > /dev/null
+check "a second list within 60 s reuses the results" [ "$(calls "$B/acc2")" = 1 ]
+f="$B/.usage/acc2.live"; { echo $(( $(date +%s) - 120 )); tail -n +2 "$f"; } > "$f.x" && mv "$f.x" "$f"
+r list > /dev/null
+check "an older result is checked again" [ "$(calls "$B/acc2")" = 2 ]
+rm -f "$B/.usage/"*.live; out="$(r list --cached)"
+check "--cached runs no check" [ "$(calls "$B/acc2")" = 2 ]
+check "--cached falls back to the last-seen line" has "$out" "usage: not seen yet"
+check "live results are private" [ "$(mode "$B/.usage")" = 700 ]
+cleanup
+
+setup "usage: timeout and last-seen fallback"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+profile acc2 "jane@work.example $(in_days 20)"
+r names > /dev/null
+usage "$B/acc2" "Current session: 50% used"; echo 30 > "$B/acc2/fake-usage-delay"
+seen_json acc2 12.4 7530 40 274000 300
+start=$SECONDS; out="$(EXTRA=RELEVO_USAGE_TIMEOUT=2 r list)"; took=$(( SECONDS - start ))
+check "a slow account is stopped at the timeout" [ "$took" -lt 6 ]
+check "its check was cut off" hasnt "$(log)" "usage-done cfg=$B/acc2"
+check "it shows what the status line last saw" has "$out" "usage: 5h 12% used, resets in 2h05m · 7d 40% used, resets in 3d4h   (seen 5 min ago)"
+seen_json acc2 100 -60 40 274000 7300
+out="$(r list --cached)"
+check "a window whose reset has passed says so" has "$out" "usage: 5h reset since · 7d 40% used"
+check "old sightings in hours" has "$out" "(seen 2 h ago)"
+cleanup
+
+setup "usage: a check that ran a model turn is not trusted"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+usage "$H/.claude" "Current session: 12% used"; echo 1 > "$H/.claude/fake-usage-turns"
+out="$(r list)"
+check "says so" has "$out" "ran a model turn, which it never should"
+check "and does not show it" hasnt "$out" "Current session: 12% used"
+cleanup
+
+setup "status line"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+profile acc2 "jane@work.example $(in_days 20)"
+profile acc3 "bob@client.example $(in_days 20)"
+r names > /dev/null
+now=$(date +%s)
+J="{\"session_id\":\"$SID\",\"transcript_path\":\"$B/acc2/projects/p/$SID.jsonl\",\"model\":{\"id\":\"claude-opus-5-5\",\"display_name\":\"Opus\"},\"workspace\":{\"current_dir\":\"$T/proj\"},\"rate_limits\":{\"five_hour\":{\"used_percentage\":12.4,\"resets_at\":$(( now + 3600 ))},\"seven_day\":{\"used_percentage\":40,\"resets_at\":$(( now + 90000 ))}}}"
+sl() { printf '%s' "$2" | (cd "$T/proj" && env -i HOME="$H" PATH="$ROOT/test/fake:/usr/bin:/bin" FAKE_LOG="$T/claude.log" \
+        FAKE_PLAN="$T/plan" $1 "$SH" "$CLI" statusline 2>&1); }
+put_login() { mkdir -p "$B/.usage"; echo "$(date +%s) $2 in" > "$B/.usage/$1.login"; }
+put_login acc2 $(( now + 20 * 86400 )); put_login acc3 $(( now + 20 * 86400 )); : > "$T/claude.log"
+out="$(sl "CLAUDE_CONFIG_DIR=$B/acc2" "$J")"
+check "name · 5h · 7d · model" [ "$out" = "jane · 5h 12% · 7d 40% · Opus" ]
+check "remembers the usage for relevo list" grep -q '"used_percentage":12.4' "$B/.usage/acc2.json"
+check "the cache is private" [ "$(mode "$B/.usage/acc2.json")" = 600 ]
+check "starts no claude when the login cache is fresh" [ "$(grep -c '^status ' "$T/claude.log")" = 0 ]
+out="$(sl "RELEVO_PROFILE=acc3" "$J")"; check "RELEVO_PROFILE wins" [ "${out%% *}" = bob ]
+out="$(sl "" "$J")"; check "with the environment scrubbed, the transcript path tells" [ "${out%% *}" = jane ]
+out="$(sl "" "{\"transcript_path\":\"$H/.claude/projects/p/x.jsonl\",\"model\":{\"display_name\":\"Opus\"}}")"
+check "main, with no rate limits yet" [ "$out" = "me · Opus" ]
+cp "$B/.usage/acc2.json" "$T/before"
+sl "CLAUDE_CONFIG_DIR=$B/acc2" "{\"model\":{\"display_name\":\"Opus\"}}" > /dev/null
+check "input without rate limits leaves the cache alone" cmp -s "$T/before" "$B/.usage/acc2.json"
+put_login acc2 $(( now + 3 * 86400 + 3600 )); out="$(sl "CLAUDE_CONFIG_DIR=$B/acc2" "$J")"
+check "login under the warning days" [ "$out" = "jane · 5h 12% · 7d 40% · Opus · login expires in 3d" ]
+put_login acc2 $(( now - 60 )); out="$(sl "CLAUDE_CONFIG_DIR=$B/acc2" "$J")"
+check "expired login" has "$out" "· login expired"
+rm "$B/.usage/acc3.login"; sl "RELEVO_PROFILE=acc3" "$J" > /dev/null
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$B/.usage/acc3.login" ] && break; sleep 0.3; done
+check "a missing login cache is refreshed in the background" grep -q ' in$' "$B/.usage/acc3.login"
+out="$(sl "CLAUDE_CONFIG_DIR=$B/acc2" "{\"model\":{\"display_name\":\"\$(touch $T/pwned)\"}}")"
+check "input is shown, never run" [ ! -e "$T/pwned" ]
+out="$(sl "CLAUDE_CONFIG_DIR=/somewhere/else" "$J")"
+check "a config folder outside relevo shows its folder name, caches nothing" [ "${out%% *}" = else ]
+cleanup
+
+setup "switch to an account at its limit"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+profile acc2 "jane@work.example $(in_days 20)"
+profile acc3 "bob@client.example $(in_days 20)"
+r names > /dev/null
+usage "$B/acc3" "Current session: 100% used · resets 4pm (Europe/Paris)\nCurrent week (all models): 30% used"
+printf 'switch bob\nswitch bob --anyway\nexit 0\n' > "$T/plan"
+r jane > /dev/null; L="$(log)"
+check "warns with what Claude Code said, and when it resets" has "$L" "switch-exit=4 out=bob is at a usage limit: Current session: 100% used · resets 4pm (Europe/Paris)"
+check "does not switch on its own" [ "$(grep -c '^run ' "$T/claude.log")" = 1 ]
+: > "$T/claude.log"; r jane > /dev/null; L="$(log)"
+check "--anyway switches" has "$L" "run cfg=$B/acc3 profile=acc3"
+rm -f "$B/acc3/fake-usage" "$B/.usage/acc3.live" "$T/plan.n"; : > "$T/claude.log"
+seen_json acc3 100 3630 30 90000 600
+printf 'switch bob\n' > "$T/plan"; r jane > /dev/null
+check "without a live answer, the last-seen 100% warns too" has "$(log)" "switch-exit=4 out=bob is at a usage limit: 5h 100% used, resets in 1h00m (last seen)"
+seen_json acc3 100 -60 30 90000 600; rm -f "$T/plan.n"; : > "$T/claude.log"
+printf 'switch bob\nexit 0\n' > "$T/plan"; r jane > /dev/null
+check "a limit that has reset since does not warn" has "$(log)" "switch-exit=0 out=Switching to bob"
+cleanup
+
+setup "rate-limit stop"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+profile acc2 "jane@work.example $(in_days 20)"
+profile acc3 "bob@client.example $(in_days 20)"
+profile acc4 "out"
+profile acc5 "full@client.example $(in_days 20)"
+r names > /dev/null
+usage "$H/.claude" "Current session: 80% used"
+usage "$B/acc3" "Current session: 30% used · resets 5pm"
+usage "$B/acc5" "Current session: 100% used"
+ENVS="RELEVO_PROFILE=acc2 CLAUDE_CODE_SESSION_ID=$SID CLAUDE_PROJECT_DIR=$T/proj"
+out="$(EXTRA="$ENVS RELEVO_WRAPPER=$$" r _limited)"
+check "suggests the account with the most room" [ "$out" = "Usage limit reached on jane. To continue this conversation on bob:  /switch bob   (Current session: 30% used · resets 5pm)" ]
+check "records the stop" [ -f "$B/.usage/acc2.limited" ]
+check "never switches by itself" no_request
+out="$(EXTRA="$ENVS" r _limited)"
+check "outside relevo it gives the command" has "$out" "exit, then run:  cd $T/proj && relevo bob --resume $SID"
+usage "$B/acc3" "Current session: 100% used"; usage "$H/.claude" "Current week (all models): 100% used"; rm -f "$B/.usage/"*.live
+out="$(EXTRA="$ENVS RELEVO_WRAPPER=$$" r _limited)"
+check "says when no account has room" has "$out" "No other signed-in account has room right now"
+cleanup
+
+setup "account"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+profile acc2 "jane@work.example $(in_days 20)"
+profile acc3 "bob@client.example $(in_days 20)"
+r names > /dev/null
+usage "$B/acc2" "Current session: 100% used · resets 4pm"; usage "$B/acc3" "Current session: 10% used"
+out="$(EXTRA=RELEVO_PROFILE=acc2 r account)"
+check "marks this session's account" line "$out" '^▶ jane +\(acc2\)'
+check "the others are not marked" line "$out" '^  bob +\(acc3\)'
+check "says where to continue when at a limit" has "$out" "This session runs on jane. It is at a usage limit; to continue this conversation on bob:  /switch bob"
+usage "$B/acc2" "Current session: 10% used"; rm -f "$B/.usage/"*.live
+out="$(EXTRA=RELEVO_PROFILE=acc2 r account)"
+check "no suggestion when there is room" [ "$(printf '%s\n' "$out" | tail -1)" = "This session runs on jane." ]
+cleanup
+
+setup "plugin settings reach the terminal"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+r new acc2 > /dev/null
+EXTRA=RELEVO_WARN_DAYS=25 r _sync
+check "_sync saves the warning days" [ "$(cat "$B/.prefs")" = "warn_days=25" ]
+out="$(r list --cached)"
+check "the terminal CLI uses them" has "$(lines_with "$out" 'in 20 days')" "sign in again soon"
 cleanup
 
 # ---------------------------------------------------------------------------------------------

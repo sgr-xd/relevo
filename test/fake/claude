@@ -11,6 +11,7 @@ cfgdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 log() { printf '%s\n' "$*" >> "$FAKE_LOG"; }
 
 if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  log "status cfg=${CLAUDE_CONFIG_DIR-UNSET}"
   st="$(cat "$cfgdir/fake-auth" 2>/dev/null || echo out)"
   case "$st" in
     out) printf '{\n  "loggedIn": false,\n  "authMethod": "none",\n  "loginExpiresAt": null\n}\n'; exit 1 ;;
@@ -34,6 +35,20 @@ fi
 case "${1:-} ${2:-}" in
   "auth logout"*|"setup-token"*) log "FORBIDDEN $*"; exit 99 ;;
 esac
+
+# claude -p "/usage" …: prints <config dir>/fake-usage as the result (after fake-usage-delay
+# seconds), with num_turns from fake-usage-turns (0 unless a test says otherwise)
+if [ "${1:-}" = -p ] && [ "${2:-}" = /usage ]; then
+  log "usage cfg=${CLAUDE_CONFIG_DIR-UNSET} pwd=$PWD args=${*:3}"
+  d="$(cat "$cfgdir/fake-usage-delay" 2>/dev/null)"; [ -n "$d" ] && sleep "$d"
+  turns="$(cat "$cfgdir/fake-usage-turns" 2>/dev/null || echo 0)"
+  res="$(cat "$cfgdir/fake-usage" 2>/dev/null || printf 'Total cost: $0.00\nUsage:')"
+  esc="$(printf '%s\n' "$res" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN { ORS = "\\n" } { print }')"
+  printf '{"type":"result","subtype":"success","is_error":false,"num_turns":%s,"result":"%s","total_cost_usd":0}\n' \
+    "$turns" "${esc%\\n}"
+  log "usage-done cfg=${CLAUDE_CONFIG_DIR-UNSET}"
+  exit 0
+fi
 
 log "run cfg=${CLAUDE_CONFIG_DIR-UNSET} profile=${RELEVO_PROFILE:-} pwd=$PWD args=$*"
 n="$(cat "$FAKE_PLAN.n" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "$n" > "$FAKE_PLAN.n"

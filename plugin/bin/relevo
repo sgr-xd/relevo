@@ -10,7 +10,10 @@
 #
 #   relevo add <email> [--sso] [--name <name>]
 #                                add an account: new profile, then Claude Code's own sign-in page
-#   relevo list                  every account, its name, and whether it is signed in
+#   relevo list [--cached]       every account: name, login expiry, and its 5-hour / weekly usage
+#                                (live from Claude Code's /usage; --cached: last seen only)
+#   relevo account               the same, marking the account this session runs on (/account)
+#   relevo statusline            status-line segment: put "relevo statusline" in settings.json
 #   relevo <name> [claude args]  run claude as that account, e.g. relevo jane.doe --resume <id>
 #   relevo run <name> [args]     the same, for a name that matches one of these commands
 #   relevo rename <name> <new>   give an account another name
@@ -34,8 +37,16 @@ SWITCH_DIR="$BASE/.switch"
 BIN_COPY="$BASE/.bin/$PROG"     # stable copy that ~/.local/bin/relevo points to
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 NAME_RE='^[a-z0-9][a-z0-9._-]{0,63}$'
-RESERVED=" main add list names new fix run rename install help _switch _sync "
-WARN_DAYS="${RELEVO_WARN_DAYS:-5}"; [[ "$WARN_DAYS" =~ ^[0-9]{1,3}$ ]] || WARN_DAYS=5
+USAGE_DIR="$BASE/.usage"        # <t>.json last-seen status-line usage, <t>.live /usage lines,
+                                # <t>.login login-expiry cache, <t>.limited last rate-limit stop
+PREFS="$BASE/.prefs"            # warn_days=N, written from the plugin's settings at session start
+RESERVED=" main add list account statusline names new fix run rename install help "
+NOTES=""                        # warnings collected while checking usage
+LIVE_TTL=60                     # seconds a live /usage result is reused
+USAGE_TIMEOUT="${RELEVO_USAGE_TIMEOUT:-20}"; [[ "$USAGE_TIMEOUT" =~ ^[0-9]{1,3}$ ]] || USAGE_TIMEOUT=20
+WARN_DAYS="${RELEVO_WARN_DAYS:-}"
+[ -z "$WARN_DAYS" ] && [ -f "$PREFS" ] && WARN_DAYS="$(sed -n 's/^warn_days=\([0-9]*\)$/\1/p' "$PREFS" | head -1)"
+[[ "$WARN_DAYS" =~ ^[0-9]{1,3}$ ]] || WARN_DAYS=5
 SHARED=(settings.json CLAUDE.md agents commands hooks output-styles plugins skills projects
         file-history plans dev-mods history.jsonl)
 
@@ -62,9 +73,24 @@ name_of() {
 
 # Run a command with the right config for a target. The default profile runs with
 # CLAUDE_CONFIG_DIR unset: setting it to ~/.claude would make Claude Code look for another login.
-cfg_env() {
-  local t="$1"; shift
-  if [ "$t" = main ]; then env -u CLAUDE_CONFIG_DIR "$@"; else env CLAUDE_CONFIG_DIR="$BASE/$t" "$@"; fi
+env_cmd() {  # target -> ENVCMD, the env prefix that selects its config
+  if [ "$1" = main ]; then ENVCMD=(env -u CLAUDE_CONFIG_DIR); else ENVCMD=(env "CLAUDE_CONFIG_DIR=$BASE/$1"); fi
+}
+cfg_env() { local t="$1"; shift; env_cmd "$t"; "${ENVCMD[@]}" "$@"; }
+
+# The account a running session belongs to: RELEVO_PROFILE (set by the wrapper), else
+# CLAUDE_CONFIG_DIR, else a path under it such as the session's transcript_path (for when
+# CLAUDE_CODE_SUBPROCESS_ENV_SCRUB removed CLAUDE_CONFIG_DIR). Unset config means main;
+# a config folder outside the profiles folder prints nothing.
+current_target() {
+  local p="${RELEVO_PROFILE:-}" c="${CLAUDE_CONFIG_DIR:-${1:-}}" rest
+  if [ -n "$p" ] && [[ "$p" =~ $NAME_RE ]] && { [ "$p" = main ] || [ -d "$BASE/$p" ]; }; then echo "$p"; return; fi
+  case "$c" in
+    "$BASE"/*) rest="${c#"$BASE"/}"; rest="${rest%%/*}"
+               [[ "$rest" =~ $NAME_RE ]] && [ -d "$BASE/$rest" ] && { echo "$rest"; return; } ;;
+  esac
+  [ -z "${CLAUDE_CONFIG_DIR:-}" ] && echo main
+  return 0
 }
 
 targets() { echo main; [ -d "$BASE" ] && for d in "$BASE"/*/; do [ -d "$d" ] && [ ! -L "${d%/}" ] && basename "$d"; done; }
@@ -77,8 +103,15 @@ iso_epoch() {  # 2026-12-16T05:00:00.000Z -> epoch seconds (BSD and GNU date)
   date -u -j -f '%Y-%m-%dT%H:%M:%S' "$s" +%s 2>/dev/null || date -u -d "${s}Z" +%s 2>/dev/null
 }
 login_state() {
-  local j exp e
-  LOGIN=unknown EXP_DATE="" EXP_LEFT="" EMAIL=""
+  read_login "$1"
+  # remember it for the status line, which must not start claude on every refresh
+  mkdir -p "$USAGE_DIR" 2>/dev/null && chmod 700 "$USAGE_DIR" 2>/dev/null &&
+    put_file "$USAGE_DIR/$1.login" "$(date +%s) ${EXP_EPOCH:--} $LOGIN"
+  return 0
+}
+read_login() {
+  local j exp
+  LOGIN=unknown EXP_DATE="" EXP_LEFT="" EXP_EPOCH="" EMAIL=""
   j="$(cfg_env "$1" claude auth status --json 2>/dev/null | tr -d '\n')"
   [ -n "$j" ] || return 0
   if printf '%s' "$j" | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*true'; then LOGIN=in
@@ -88,8 +121,13 @@ login_state() {
   exp="$(json_str loginExpiresAt "$j")"
   [ -n "$exp" ] || return 0
   EXP_DATE="${exp:0:10}"
-  e="$(iso_epoch "$exp")" && [ -n "$e" ] && EXP_LEFT=$(( e - $(date +%s) ))
+  EXP_EPOCH="$(iso_epoch "$exp")" && [ -n "$EXP_EPOCH" ] && EXP_LEFT=$(( EXP_EPOCH - $(date +%s) ))
   return 0
+}
+usable() { [ "$LOGIN" = in ] && { [ -z "$EXP_LEFT" ] || [ "$EXP_LEFT" -gt 0 ]; }; }   # after login_state
+put_file() {  # path text: atomic write, owner-only
+  local tmp
+  tmp="$(mktemp "$(dirname "$1")/.tmp.XXXXXX")" && printf '%s\n' "$2" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$1"
 }
 login_line() {  # target -> one line for `relevo list`
   local days
@@ -144,6 +182,130 @@ make_profile() {  # folder: create it with the shared links
   link_shared "$dir"
 }
 
+# --- usage: 5-hour / weekly limits, only ever as Claude Code itself reports them ---------------
+# Live: Claude Code's own /usage command, headless (no model call). Run from an empty temp folder
+# with only project settings, so the shared ~/.claude settings' hooks, plugins and MCP servers
+# do not start for it. Fallback: what the status line last saw (relevo statusline).
+json_obj() {  # key json -> inner text of "key": { … } (flat objects only)
+  printf '%s' "$2" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*{\([^{}]*\)}.*/\1/p" | head -1
+}
+json_num() { printf '%s' "$2" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9][0-9.eE+-]*\).*/\1/p" | head -1; }
+json_result() {  # the "result" string of a claude -p JSON answer, unescaped
+  local raw
+  raw="$(printf '%s' "$1" | sed -nE 's/.*"result"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' | head -1)"
+  printf '%b' "$(printf '%s' "$raw" | sed 's/\\"/"/g')"
+}
+window() {  # inner text of a rate_limits window -> W_PCT (whole %) and W_RESET (epoch), or empty
+  local p r
+  W_PCT="" W_RESET=""
+  p="$(json_num used_percentage "$1")"
+  [ -n "$p" ] && W_PCT="$(awk -v x="$p" 'BEGIN { printf "%d", x + 0.5 }')"
+  r="$(json_num resets_at "$1")"
+  if [ -z "$r" ]; then r="$(json_str resets_at "$1")"; [ -n "$r" ] && r="$(iso_epoch "$r")"; fi
+  r="${r%%.*}"
+  if [[ "$r" =~ ^[0-9]+$ ]]; then [ "$r" -gt 100000000000 ] && r=$(( r / 1000 )); W_RESET="$r"; fi
+}
+dur() { if [ "$1" -ge 86400 ]; then printf '%dd%dh' $(( $1 / 86400 )) $(( $1 % 86400 / 3600 ))
+        else printf '%dh%02dm' $(( $1 / 3600 )) $(( $1 % 3600 / 60 )); fi; }
+
+live_fresh() {  # target: a /usage result younger than LIVE_TTL exists
+  local f="$USAGE_DIR/$1.live" t
+  [ -f "$f" ] || return 1
+  t="$(head -1 "$f")"
+  [[ "$t" =~ ^[0-9]+$ ]] && [ $(( $(date +%s) - t )) -lt "$LIVE_TTL" ]
+}
+store_live() {  # target, claude -p output file
+  local j turns lines
+  j="$(tr -d '\n' < "$2")"
+  printf '%s' "$j" | grep -q '"subtype"[[:space:]]*:[[:space:]]*"success"' || return 0
+  turns="$(json_num num_turns "$j")"
+  if [ -n "$turns" ] && [ "$turns" != 0 ]; then
+    NOTES="${NOTES}note: the usage check for $(name_of "$1") ran a model turn, which it never should; its result is not used.
+"
+    return 0
+  fi
+  lines="$(json_result "$j" | sed 's/^[[:space:]]*//' | grep -F '% used' | grep -vE '^(Last|Top) ')"
+  [ -n "$lines" ] && put_file "$USAGE_DIR/$1.live" "$(date +%s)
+$lines"
+}
+watchdog() {  # pid seconds: stop pid after that long, unless this watchdog is stopped first
+  local s
+  trap 'kill "$s" 2> /dev/null; exit 0' TERM
+  sleep "$2" & s=$!
+  wait "$s" && kill -TERM "$1" 2> /dev/null
+}
+# Live /usage for each target, all at once, each stopped after USAGE_TIMEOUT seconds.
+fetch_live() {
+  local tmpd t pid jobs="" j
+  [ $# -gt 0 ] || return 0
+  mkdir -p "$USAGE_DIR" && chmod 700 "$USAGE_DIR" || return 0
+  tmpd="$(mktemp -d "${TMPDIR:-/tmp}/relevo-usage.XXXXXX")" || return 0
+  {  # stderr off here: bash reports every stopped job ("Terminated") when it reaps it
+    for t in "$@"; do
+      live_fresh "$t" && continue
+      env_cmd "$t"
+      ( cd "$tmpd" && exec "${ENVCMD[@]}" claude -p "/usage" --output-format json --no-session-persistence \
+          --setting-sources project --strict-mcp-config < /dev/null > "$tmpd/$t.out" ) &
+      pid=$!
+      ( watchdog "$pid" "$USAGE_TIMEOUT" ) > /dev/null &
+      jobs="$jobs $pid:$!"
+    done
+    for j in $jobs; do wait "${j%%:*}"; kill -TERM "${j#*:}"; wait "${j#*:}"; done
+  } 2> /dev/null
+  for t in "$@"; do [ -s "$tmpd/$t.out" ] && store_live "$t" "$tmpd/$t.out"; done
+  rm -rf "$tmpd"
+}
+cache_line() {  # target -> "usage: 5h N% used, resets in … · 7d …   (seen N min ago)"
+  local f="$USAGE_DIR/$1.json" j now seen w part parts="" ago
+  [ -f "$f" ] || { echo "usage: not seen yet (shows after this account's next reply)"; return; }
+  j="$(tr -d '\n' < "$f")"; now=$(date +%s)
+  for w in five_hour:5h seven_day:7d; do
+    window "$(json_obj "${w%%:*}" "$j")"
+    [ -n "$W_PCT" ] || continue
+    if [ -n "$W_RESET" ] && [ "$W_RESET" -le "$now" ]; then part="${w#*:} reset since"
+    elif [ -n "$W_RESET" ]; then part="${w#*:} $W_PCT% used, resets in $(dur $(( W_RESET - now )))"
+    else part="${w#*:} $W_PCT% used"; fi
+    parts="${parts:+$parts · }$part"
+  done
+  seen="$(json_num seen "$j")"; seen="${seen%%.*}"; ago=""
+  if [[ "$seen" =~ ^[0-9]+$ ]]; then
+    ago=$(( (now - seen) / 60 ))
+    if [ "$ago" -lt 120 ]; then ago="   (seen $ago min ago)"; else ago="   (seen $(( ago / 60 )) h ago)"; fi
+  fi
+  echo "usage: ${parts:-no data}$ago"
+}
+usage_lines() {  # target -> the lines to show under it: live if fresh, else last seen
+  if live_fresh "$1"; then tail -n +2 "$USAGE_DIR/$1.live"; else cache_line "$1"; fi
+}
+# target -> 0 when a window is at 100% (LIMIT_TEXT says which, and when it resets)
+at_limit() {
+  local j now w
+  LIMIT_TEXT=""
+  if live_fresh "$1"; then
+    LIMIT_TEXT="$(tail -n +2 "$USAGE_DIR/$1.live" | grep -E '(^|[^0-9])100% used' | head -2 | paste -sd ';' - | sed 's/;/; /g')"
+    [ -n "$LIMIT_TEXT" ]; return
+  fi
+  [ -f "$USAGE_DIR/$1.json" ] || return 1
+  j="$(tr -d '\n' < "$USAGE_DIR/$1.json")"; now=$(date +%s)
+  for w in five_hour:5h seven_day:7d; do
+    window "$(json_obj "${w%%:*}" "$j")"
+    [ -n "$W_PCT" ] && [ "$W_PCT" -ge 100 ] || continue
+    [ -n "$W_RESET" ] && [ "$W_RESET" -le "$now" ] && continue
+    LIMIT_TEXT="${w#*:} 100% used${W_RESET:+, resets in $(dur $(( W_RESET - now )))} (last seen)"
+    return 0
+  done
+  return 1
+}
+fullness() {  # target -> highest % it shows (999 when unknown), for picking where to continue
+  local m
+  if live_fresh "$1"; then
+    m="$(tail -n +2 "$USAGE_DIR/$1.live" | grep -oE '[0-9]+% used' | tr -dc '0-9\n' | sort -n | tail -1)"
+  else
+    m="$(cache_line "$1" | grep -oE '[0-9]+% used' | tr -dc '0-9\n' | sort -n | tail -1)"
+  fi
+  echo "${m:-999}"
+}
+
 link_shared() {
   local dir="$1" item
   for item in "${SHARED[@]}"; do
@@ -185,8 +347,13 @@ run_loop() {
 # Called by /switch from inside a running session (the plugin passes the session's environment).
 # Exit 0: a switch was requested and the caller should close the session now.
 # Exit 3: nothing to do; the printed line says why. Exit 1: an error.
+# Exit 4: that account is at a usage limit; nothing done. The caller may ask the person and
+#         call again with --anyway.
 cmd_switch() {
-  local want="${1:-}" to sid dir tmp
+  local want="" anyway="" to sid dir tmp
+  while [ $# -gt 0 ]; do
+    case "$1" in --anyway) anyway=1 ;; *) [ -z "$want" ] && want="$1" ;; esac; shift
+  done
   [ -n "$want" ] || { echo "usage: /switch <name>   ($PROG list shows the names)"; exit 3; }
   [[ "$want" =~ $NAME_RE ]] || { echo "No account named '$want' ($PROG list shows them)."; exit 3; }
   to="$(resolve "$want")"
@@ -199,6 +366,10 @@ cmd_switch() {
     printf '%s is not signed in%s. Sign in again: %s %s, then /login\n' "$want" \
       "${EXP_DATE:+ (login expired $EXP_DATE)}" "$PROG" "$want"
     exit 3
+  fi
+  if [ -z "$anyway" ]; then
+    fetch_live "$to"
+    if at_limit "$to"; then printf '%s is at a usage limit: %s\n' "$want" "$LIMIT_TEXT"; exit 4; fi
   fi
   dir="${CLAUDE_PROJECT_DIR:-$PWD}"
   if [ -z "${RELEVO_WRAPPER:-}" ] || ! [[ "$RELEVO_WRAPPER" =~ ^[0-9]+$ ]] || ! kill -0 "$RELEVO_WRAPPER" 2>/dev/null; then
@@ -309,11 +480,117 @@ cmd_fix() {
   link_shared "$BASE/$t"; echo "Links checked for $want."
 }
 
+# Every account with its login, then (unless --cached) a live usage check of the usable ones
+# in parallel. MARK, when set, is the target to mark as "this session".
 cmd_list() {
-  local t
+  local cached="" tmpd t l mark ok=() all=()
+  [ "${1:-}" = --cached ] && cached=1
+  tmpd="$(mktemp -d "${TMPDIR:-/tmp}/relevo-list.XXXXXX")" || die "no temp folder"
   while read -r t; do
-    printf '%-24s %-8s %s\n' "$(name_of "$t")" "($t)" "$(login_line "$t")"
+    all+=("$t")
+    login_line "$t" > "$tmpd/$t"
+    usable && ok+=("$t") && : > "$tmpd/$t.ok"
   done < <(targets)
+  [ -z "$cached" ] && [ ${#ok[@]} -gt 0 ] && fetch_live "${ok[@]}"
+  for t in "${all[@]}"; do
+    mark=""; if [ -n "${MARK:-}" ]; then mark="  "; [ "$MARK" = "$t" ] && mark="▶ "; fi
+    printf '%s%-24s %-8s %s\n' "$mark" "$(name_of "$t")" "($t)" "$(cat "$tmpd/$t")"
+    [ -f "$tmpd/$t.ok" ] && usage_lines "$t" | sed 's/^/                                   /'
+  done
+  rm -rf "$tmpd"
+  [ -n "${NOTES:-}" ] && printf '%s' "$NOTES"
+  return 0
+}
+
+# /account: the list, this session's account marked, and where to continue if it is at a limit.
+cmd_account() {
+  local cur best
+  cur="$(current_target)"
+  echo "Accounts (▶ this session):"
+  MARK="$cur" cmd_list "$@"
+  [ -n "$cur" ] || return 0
+  printf '\nThis session runs on %s.' "$(name_of "$cur")"
+  if at_limit "$cur"; then
+    best="$(best_other "$cur")"
+    if [ -n "$best" ]; then printf ' It is at a usage limit; to continue this conversation on %s:  /switch %s\n' "$best" "$best"
+    else printf ' It is at a usage limit, and no other signed-in account has room right now.\n'; fi
+  else printf '\n'; fi
+}
+
+best_other() {  # current target -> name of the usable account with the most room (uses caches)
+  local t f best="" bestf=1000
+  while read -r t; do
+    [ "$t" = "$1" ] && continue
+    [ -f "$USAGE_DIR/$t.login" ] || continue
+    login_ok_cached "$t" || continue
+    at_limit "$t" && continue
+    f="$(fullness "$t")"
+    [ "$f" -lt "$bestf" ] && { bestf="$f"; best="$(name_of "$t")"; }
+  done < <(targets)
+  echo "$best"
+}
+login_ok_cached() {  # target: its cached login state is signed in and not expired
+  local c e
+  c="$(cat "$USAGE_DIR/$1.login" 2>/dev/null)"
+  [ "${c##* }" = in ] || return 1
+  e="$(echo "$c" | awk '{ print $2 }')"
+  [ "$e" = - ] || [ "$e" -gt "$(date +%s)" ]
+}
+
+# Called by the plugin when a turn stopped on a rate limit: record it and say where the
+# conversation could continue. Never switches by itself.
+cmd_limited() {
+  local cur t others=() best line sid="${CLAUDE_CODE_SESSION_ID:-}" dir="${CLAUDE_PROJECT_DIR:-$PWD}"
+  cur="$(current_target)"; [ -n "$cur" ] || exit 0
+  mkdir -p "$USAGE_DIR" && chmod 700 "$USAGE_DIR" && put_file "$USAGE_DIR/$cur.limited" "$(date +%s)"
+  while read -r t; do
+    [ "$t" = "$cur" ] && continue
+    login_state "$t"; usable && others+=("$t")
+  done < <(targets)
+  [ ${#others[@]} -gt 0 ] && fetch_live "${others[@]}"
+  best="$(best_other "$cur")"
+  if [ -z "$best" ]; then
+    echo "Usage limit reached on $(name_of "$cur"). No other signed-in account has room right now ($PROG list shows them)."
+    exit 0
+  fi
+  line="$(usage_lines "$(resolve "$best")" | head -1)"
+  if [ -n "${RELEVO_WRAPPER:-}" ] && [[ "$RELEVO_WRAPPER" =~ ^[0-9]+$ ]] && kill -0 "$RELEVO_WRAPPER" 2>/dev/null; then
+    echo "Usage limit reached on $(name_of "$cur"). To continue this conversation on $best:  /switch $best   ($line)"
+  else
+    printf 'Usage limit reached on %s. To continue this conversation on %s, exit, then run:  cd %q && %s %s --resume %s   (%s)\n' \
+      "$(name_of "$cur")" "$best" "$dir" "$PROG" "$best" "$sid" "$line"
+  fi
+}
+
+# Status-line segment: "name · 5h N% · 7d N% · model", and a login warning under WARN_DAYS.
+# Reads only the JSON Claude Code passes on stdin; remembers the usage for relevo list.
+cmd_statusline() {
+  local in t name five seven model out now c e days
+  in="$(tr -d '\n')"; now=$(date +%s)
+  t="$(current_target "$(json_str transcript_path "$in")")"
+  if [ -n "$t" ]; then name="$(name_of "$t")"; else name="$(basename "${CLAUDE_CONFIG_DIR:-claude}")"; fi
+  five="$(json_obj five_hour "$in")"; seven="$(json_obj seven_day "$in")"
+  if [ -n "$t" ] && { [ -n "$five" ] || [ -n "$seven" ]; } && mkdir -p "$USAGE_DIR" 2>/dev/null; then
+    chmod 700 "$USAGE_DIR" 2>/dev/null
+    put_file "$USAGE_DIR/$t.json" "{\"seen\":$now,\"five_hour\":{$five},\"seven_day\":{$seven}}" 2>/dev/null
+  fi
+  out="$name"
+  window "$five";  [ -n "$W_PCT" ] && out="$out · 5h $W_PCT%"
+  window "$seven"; [ -n "$W_PCT" ] && out="$out · 7d $W_PCT%"
+  model="$(json_str display_name "$(json_obj model "$in")")"; [ -n "$model" ] && out="$out · $model"
+  if [ -n "$t" ]; then
+    c="$(cat "$USAGE_DIR/$t.login" 2>/dev/null)"; e="${c%% *}"; [[ "$e" =~ ^[0-9]+$ ]] || e=0
+    # refresh the login cache in the background when it is missing or older than 6 hours
+    if [ $(( now - e )) -gt 21600 ]; then
+      ( "$BASH" "$0" _login_cache "$t" > /dev/null 2>&1 & ) 2> /dev/null
+    fi
+    e="$(echo "$c" | awk '{ print $2 }')"
+    if [[ "$e" =~ ^[0-9]+$ ]]; then
+      if [ "$e" -le "$now" ]; then out="$out · login expired"
+      else days=$(( (e - now) / 86400 )); [ "$days" -lt "$WARN_DAYS" ] && out="$out · login expires in ${days}d"; fi
+    fi
+  fi
+  printf '%s\n' "$out"
 }
 
 self_path() { local d; d="$(cd -P "$(dirname "$0")" && pwd -P)" && echo "$d/$(basename "$0")"; }
@@ -339,8 +616,12 @@ copy_self() {  # atomic replace, so a running copy is never half-written
   local tmp
   tmp="$(mktemp "$BASE/.bin/.$PROG.XXXXXX")" && cp "$1" "$tmp" && chmod 755 "$tmp" && mv "$tmp" "$BIN_COPY"
 }
-cmd_sync() {  # refresh the installed copy if there is one and it differs
+cmd_sync() {  # at session start: save the plugin's settings; refresh the installed copy if it differs
   local self
+  if [ -d "$BASE" ] && [ -n "${RELEVO_WARN_DAYS:-}" ] && [[ "$RELEVO_WARN_DAYS" =~ ^[0-9]{1,3}$ ]] \
+     && [ "$(cat "$PREFS" 2>/dev/null)" != "warn_days=$RELEVO_WARN_DAYS" ]; then
+    put_file "$PREFS" "warn_days=$RELEVO_WARN_DAYS"
+  fi
   [ -f "$BIN_COPY" ] || exit 0
   self="$(self_path)" || exit 0
   [ "$self" = "$BIN_COPY" ] && exit 0
@@ -352,12 +633,16 @@ case "$cmd" in
   ""|-h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
   _switch) shift; cmd_switch "$@" ;;
   _sync)   cmd_sync ;;
+  _limited) cmd_limited ;;
+  _login_cache) [[ "${2:-}" =~ $NAME_RE ]] && { [ "$2" = main ] || [ -d "$BASE/$2" ]; } && login_state "$2" ;;
+  statusline) cmd_statusline ;;
+  account) shift; cmd_account "$@" ;;
   add)     shift; cmd_add "$@" ;;
   rename)  shift; cmd_rename "$@" ;;
   names)   cmd_names ;;
   new)     shift; cmd_new "$@" ;;
   fix)     shift; cmd_fix "$@" ;;
-  list)    cmd_list ;;
+  list)    shift; cmd_list "$@" ;;
   install) cmd_install ;;
   run|*)
     [ "$cmd" = run ] && { shift; cmd="${1:-}"; [ -n "$cmd" ] || die "usage: $PROG run <name> [claude args]"; }
