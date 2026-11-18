@@ -14,8 +14,10 @@ switching, and continuing the same conversation on another account. Read `docs/B
   argv, files or test output. The design must keep credentials where Claude Code puts them.
 - **No auto-rotation.** The tool suggests a switch; a person always runs it. Never market or
   build "get around usage limits" behaviour — this is multi-account / multi-org profiles.
-- No calls to undocumented Anthropic endpoints. Remaining-limit data comes only from Claude Code's
-  own status-line `rate_limits` input.
+- No calls to undocumented Anthropic endpoints. Remaining-limit data comes only from Claude Code
+  itself: its status-line `rate_limits` input, or its own `/usage` command run headless
+  (`claude -p "/usage" --no-session-persistence`, no model call). Relevo never calls an
+  Anthropic endpoint directly.
 - Name: Relevo (Spanish for relay handoff). "Claude" must never be part of the product name (Anthropic trademark). The name
   lives in one place so a rename is cheap.
 
@@ -30,6 +32,6 @@ switching, and continuing the same conversation on another account. Read `docs/B
 ## Git
 
 - Identity and push credentials are configured repo-locally; do not change git config.
-- Milestone branches `s<N>-<slug>`; merge to `main` only after the orchestrator approves.
+- Milestone branches `r<N>-<slug>`; merge to `main` only after the orchestrator approves.
 - No GitHub remote yet — commit locally, do not create repos or push.
 - End commit messages with: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
