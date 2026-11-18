@@ -44,7 +44,8 @@ hits="$(tracked -i 'switchyard')"   # the working folder's name, which may chang
 # every command lives under /relevo; bare /switch or /account would clash with a future built-in.
 # Tests name the old commands on purpose (they check they are gone); CHANGELOG keeps history.
 hits="$(printf '%s\n' "$files" | grep -vE '^(CHANGELOG\.md|test/.*|plugin/hooks/register\.test\.ts|test/release-check\.sh)$' | tr '\n' '\0' \
-  | xargs -0 grep -nIE '(^|[^A-Za-z0-9_.~-])/(switch|account)\b' 2>/dev/null | grep -vE '/relevo (switch|account)')"
+  | xargs -0 grep -nIE '(^|[^A-Za-z0-9_.~-])/(switch|account)\b' 2>/dev/null \
+  | sed -E 's#/relevo (switch|account)##g' | grep -E '(^|[^A-Za-z0-9_.~-])/(switch|account)\b')"   # a correct mention never hides a stale one on the same line
 [ -z "$hits" ] && pass "every slash command is under /relevo" || fail "bare /switch or /account in shipped files" "$hits"
 
 hits="$(tracked 'TODO|FIXME|link needed')"

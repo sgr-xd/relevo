@@ -15,6 +15,13 @@ Version 0.2.0. Breaking: the slash commands moved.
   a terminal", on one screen. Inside a session the inside group comes first, and
   terminal-only commands are marked. The longer explanation moved to `relevo help --more`.
 
+### Fixed
+
+- `/relevo switch` takes exactly one account name. Extra words or anything starting with `-`
+  get the usage line and never reach the CLI. Before, `/switch bob --anyway` skipped the
+  usage-limit question and closed the session; only the person's "Switch anyway" adds it now.
+- The parallel-check test no longer depends on timing: the three checks must meet at a barrier.
+
 ### Added
 
 - Tests: only `/relevo` is registered; the plugin's in-session allowlist equals the CLI's

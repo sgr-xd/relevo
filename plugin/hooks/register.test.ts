@@ -200,3 +200,30 @@ test('/relevo with no subcommand shows the help', async ($, on) => {
   expect(out.text).toBe('Relevo: several Claude accounts, one Claude Code.')
   expect(seen.ran.map(r => r.argv.slice(1))).toEqual([['help']])
 })
+
+for (const args of ['switch bob --anyway', 'switch --anyway bob', 'switch bob extra', 'switch', 'switch -x', 'switch Bob', 'switch ../bob']) {
+  test(`/relevo ${args} is refused before the CLI: no --anyway, no close`, async ($, on) => {
+    const seen = scripted(on, [SWITCHING])
+    const asked = answerAsk(on, 'Switch anyway')
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+    const out = await $.command.run({ command: 'relevo', args })
+
+    expect(out.text).toBe('usage: /relevo switch <name>   (relevo list shows the names)')
+    expect(seen.ran.filter(r => r.argv[1] === '_switch')).toEqual([])
+    expect(seen.ran.some(r => r.argv.includes('--anyway'))).toBe(false)
+    expect(asked).toEqual([])
+    await settle(() => false)
+    expect(seen.exits).toEqual([])
+  })
+}
+
+test('only the "Switch anyway" answer adds --anyway, and only after the plain check', async ($, on) => {
+  const seen = scripted(on, [LIMIT, SWITCHING])
+  answerAsk(on, 'Switch anyway')
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+  await $.command.run({ command: 'relevo', args: 'switch bob' })
+
+  expect(seen.ran.map(r => r.argv.slice(1))).toEqual([['_switch', 'bob'], ['_switch', 'bob', '--anyway']])
+})

@@ -280,8 +280,8 @@ r names > /dev/null
 usage "$H/.claude" "Current session: 12% used · resets 3pm (Europe/Paris)\nCurrent week (all models): 40% used · resets Nov 22 at 6:30am\nLast 24h: 3 sessions, 2% used\nTop model: Opus 50% used\nEstimated cost: \$0"
 usage "$B/acc2" "Current session: 100% used · resets 4pm (Europe/Paris)\nCurrent week (all models): 71% used · resets Nov 22"
 usage "$B/acc3" "  Current session: 5% used · resets 5pm\n  Current week (\"Fable\"): 9% used"
-for d in "$H/.claude" "$B/acc2" "$B/acc3"; do echo 2 > "$d/fake-usage-delay"; done
-start=$SECONDS; out="$(r list)"; took=$(( SECONDS - start ))
+echo 3 > "$H/fake-barrier"   # the three checks must be running at the same time to get through
+out="$(EXTRA=RELEVO_USAGE_TIMEOUT=30 r list)"; rm -rf "$H/fake-barrier" "$H/fake-barrier.d"
 check "a bar and percent per window" line "$out" '^   jane +20d +██████████ 100% +███████░░░  71% '
 check "columns: 5-hour, all-models week, then the rest" line "$out" '^   Account +Login +5-hour +Week, all models +Week, "Fable" +Resets$'
 check "Resets shows the fullest window, without the time zone" line "$out" '^   me .*Nov 22 6:30am$'
@@ -291,7 +291,8 @@ check "the full row ends with its mark" line "$out" '^   jane .* 4pm  ⛔$'
 check "'Last …' and 'Top …' lines are dropped" hasnt "$out" "Top model"
 check "escaped quotes come through" line "$out" '^   bob .*█░░░░░░░░░   9%'
 check "no check for a signed-out account" [ "$(calls "$B/acc4")" = 0 ]
-check "checks run in parallel (3 × 2 s in under 5 s)" [ "$took" -lt 5 ]
+check "checks run in parallel: all three were running at once" [ "$(grep -c '^usage-barrier met' "$T/claude.log")" = 3 ]
+check "and none ran alone" hasnt "$(log)" "usage-barrier alone"
 check "main is checked with CLAUDE_CONFIG_DIR unset" [ "$(calls UNSET)" = 1 ]
 check "checks skip shared hooks, plugins and MCP servers" has "$(log)" "args=--output-format json --no-session-persistence --setting-sources project --strict-mcp-config"
 check "checks run in an empty temp folder, not the project" hasnt "$(grep '^usage ' "$T/claude.log")" "pwd=$T/proj"
