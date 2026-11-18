@@ -4,16 +4,22 @@ All notable changes to Relevo. Versions follow `version` in `plugin/.claude-plug
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-18
+
+### Changed
+
+- `/account` and `relevo list` show one table: a row per account with login days left, a
+  10-step bar and percentage per usage window (5-hour, weekly, per-model weekly) and when the
+  fullest window resets. Anything that needs a person (a full window, a login about to expire,
+  a signed-out account) is listed under the table with what to do.
+- README: the comparison table says Relevo is public (since 2026-11-18).
+- The release check runs trufflehog offline (`--no-verification`), so no candidate string
+  is ever sent to another service to be checked.
+
 ### Added
 
 - Contributing guide, code of conduct, security policy, issue and pull-request templates,
   CODEOWNERS and Dependabot for GitHub Actions. CI actions are pinned to commit SHAs.
-
-### Changed
-
-- README: the comparison table says Relevo is public (since 2026-11-18).
-- The release check runs trufflehog offline (`--no-verification`), so no candidate string
-  is ever sent to another service to be checked.
 
 ## [0.1.0] - 2026-11-18
 
