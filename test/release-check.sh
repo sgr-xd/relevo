@@ -49,8 +49,8 @@ if command -v gitleaks > /dev/null; then
   [ "$code" = 0 ] && pass "gitleaks: no secrets in history" || fail "gitleaks found something (exit $code)" "$out"
 else echo "SKIP  gitleaks not installed"; fi
 if command -v trufflehog > /dev/null; then
-  out="$(trufflehog git "file://$ROOT" --no-update --fail --json 2> /dev/null)"; code=$?
-  [ "$code" = 0 ] && pass "trufflehog: no verified or unverified secrets" || fail "trufflehog found something (exit $code)" "$out"
+  out="$(trufflehog git "file://$ROOT" --no-update --no-verification --fail --json 2> /dev/null)"; code=$?
+  [ "$code" = 0 ] && pass "trufflehog: no candidate secrets (checked offline)" || fail "trufflehog found something (exit $code)" "$out"
 else echo "SKIP  trufflehog not installed"; fi
 
 [ -z "$(git status --porcelain)" ] && pass "working tree clean (what is checked is what is committed)" \

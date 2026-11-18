@@ -82,6 +82,11 @@ from the endpoint behind `/usage` instead of running `/usage`. Pick Relevo if yo
 only from Claude Code's own commands, a `/switch` that asks before moving to a full account,
 and no model turn for any of its commands.
 
+## Contributing
+
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report security
+problems privately, as [SECURITY.md](SECURITY.md) describes.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE). Relevo is not made by or affiliated with Anthropic.
