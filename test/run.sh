@@ -51,6 +51,8 @@ v="$("$SH" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')"
 echo "CLI runs under bash $v ($SH)"
 check "static: no bash-4-only syntax" \
   bash -c "! grep -nE 'declare -A|local -n|mapfile|readarray|coproc|\\\$\\{[a-zA-Z_]+(,,|\\^\\^)|\\|&' '$CLI'"
+check "static: every \$var before a non-ASCII character is braced (UTF-8 bash 3.2 reads it as part of the name)" \
+  bash -c "! LC_ALL=C grep -nE '\\\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' '$CLI'"
 check "static: the CLI never reads credentials or runs logout / setup-token" \
   bash -c "! grep -nE '\\.credentials|security (find|dump|delete)|auth logout|setup-token|keychain' '$CLI'"
 cleanup
@@ -287,6 +289,12 @@ rm -f "$B/.usage/"*.live; out="$(r list --cached)"
 check "--cached runs no check" [ "$(calls "$B/acc2")" = 2 ]
 check "--cached with nothing seen says so" line "$out" '^   jane +20d +not seen yet$'
 check "live results are private" [ "$(mode "$B/.usage")" = 700 ]
+UTF8="$(locale -a 2>/dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -1)"
+if [ -n "$UTF8" ]; then
+  out="$(EXTRA="LC_ALL=$UTF8 LANG=$UTF8" r list)"; code=$?
+  check "the table renders in a UTF-8 locale ($UTF8)" [ "$code" = 0 ]
+  check "with its notes" has "$out" "⛔ jane is at its 5-hour limit until 4pm."
+else echo "note: no UTF-8 locale on this machine; UTF-8 run skipped"; fi
 cleanup
 
 setup "usage: timeout and last-seen fallback"

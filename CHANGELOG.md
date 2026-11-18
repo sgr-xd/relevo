@@ -4,6 +4,14 @@ All notable changes to Relevo. Versions follow `version` in `plugin/.claude-plug
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-18
+
+### Fixed
+
+- `relevo list` and `/account` stopped with "unbound variable" in a UTF-8 terminal on
+  macOS's bash 3.2, which read `$foot⚠` as one variable name. Variables before non-ASCII text
+  are now braced; a static check and a run under a UTF-8 locale guard it.
+
 ## [0.1.1] - 2026-11-18
 
 ### Changed

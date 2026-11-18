@@ -519,17 +519,17 @@ cmd_list() {
     name="$(name_of "$t")"
     IFS='|' read -r st left date use < "$tmpd/$t.login"
     reset=""
-    if [ "$st" = out ]; then cell="signed out"; foot="$foot⚠ $name is not signed in: $PROG $name, then /login
+    if [ "$st" = out ]; then cell="signed out"; foot="${foot}⚠ $name is not signed in: $PROG $name, then /login
 "
     elif [ "$st" = unknown ]; then cell="unknown"
     elif [ -z "$left" ]; then cell="ok"
-    elif [ "$left" -le 0 ]; then cell="expired"; foot="$foot⚠ $name's login expired $date: $PROG $name, then /login
+    elif [ "$left" -le 0 ]; then cell="expired"; foot="${foot}⚠ $name's login expired $date: $PROG $name, then /login
 "
     else
       days=$(( left / 86400 )); cell="${days}d"; [ "$days" -eq 0 ] && cell="<1d"
       if [ "$days" -lt "$WARN_DAYS" ]; then
         cell="$cell!"
-        foot="$foot⚠ $name's login expires in $days day$([ "$days" -eq 1 ] || echo s) ($date): $PROG $name, then /login
+        foot="${foot}⚠ $name's login expires in $days day$([ "$days" -eq 1 ] || echo s) ($date): $PROG $name, then /login
 "
       fi
     fi
@@ -544,7 +544,7 @@ cmd_list() {
           [ "$wp" -ge 100 ] || continue
           reset="$reset  ⛔"
           case "$wl" in Week*) wl=weekly ;; esac
-          foot="$foot⛔ $name is at its $wl limit${wr:+ until $wr}.
+          foot="${foot}⛔ $name is at its $wl limit${wr:+ until $wr}.
 "
           break
         done < "$tmpd/$t.w"
