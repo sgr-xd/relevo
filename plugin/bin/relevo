@@ -131,22 +131,6 @@ put_file() {  # path text: atomic write, owner-only
   local tmp
   tmp="$(mktemp "$(dirname "$1")/.tmp.XXXXXX")" && printf '%s\n' "$2" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$1"
 }
-login_line() {  # target -> one line for `relevo list`
-  local days
-  login_state "$1"
-  case "$LOGIN" in
-    out) echo "NOT signed in"; return ;;
-    unknown) echo "status unknown"; return ;;
-  esac
-  if [ -z "$EXP_LEFT" ]; then echo "signed in"; return; fi
-  if [ "$EXP_LEFT" -le 0 ]; then
-    echo "login expired $EXP_DATE  ← sign in again: $PROG $(name_of "$1"), then /login"; return
-  fi
-  days=$(( EXP_LEFT / 86400 ))
-  local when="in $days days"; [ "$days" -eq 1 ] && when="in 1 day"; [ "$days" -eq 0 ] && when="in under a day"
-  local warn=""; [ "$days" -lt "$WARN_DAYS" ] && warn="  ← sign in again soon"
-  echo "signed in · login expires $when ($EXP_DATE)$warn"
-}
 local_name() {  # email -> its local part, lower-cased and made into a valid name (may be empty)
   printf '%s' "${1%%@*}" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9._-]/-/g; s/^[^a-z0-9]*//' | cut -c1-64
 }
@@ -485,23 +469,123 @@ cmd_fix() {
   link_shared "$BASE/$t"; echo "Links checked for $want."
 }
 
-# Every account with its login, then (unless --cached) a live usage check of the usable ones
-# in parallel. MARK, when set, is the target to mark as "this session".
+# target -> its usage windows, one "label|percent|resets" line each, from the live /usage
+# answer when it is fresh, else from what the status line last saw (resets as "in 2h05m").
+# Labels: "Current session" -> "5-hour", "Current week (all models)" -> "Week, all models".
+windows_of() {
+  local f="$USAGE_DIR/$1.json" j now w seen ago
+  if live_fresh "$1"; then
+    tail -n +2 "$USAGE_DIR/$1.live" | LC_ALL=C sed -nE 's/^(.*): ([0-9]+)% used( · resets (.*))?$/\1|\2|\4/p' |
+      awk -F'|' '{
+        l = $1; sub(/^Current /, "", l)
+        if (l == "session") l = "5-hour"
+        else if (l ~ /^week \(/) { sub(/^week \(/, "", l); sub(/\)$/, "", l); l = "Week, " l }
+        else l = toupper(substr(l, 1, 1)) substr(l, 2)
+        r = $3; sub(/ \([^)]*\)$/, "", r); gsub(/ at /, " ", r)
+        print l "|" $2 "|" r }'
+    return 0
+  fi
+  [ -f "$f" ] || return 0
+  j="$(one_line < "$f")"; now=$(date +%s)
+  seen="$(json_num seen "$j")"; seen="${seen%%.*}"; ago=""
+  if [[ "$seen" =~ ^[0-9]+$ ]]; then
+    ago=$(( (now - seen) / 60 ))
+    if [ "$ago" -lt 120 ]; then ago=", seen ${ago}m ago"; else ago=", seen $(( ago / 60 ))h ago"; fi
+  fi
+  for w in "five_hour|5-hour" "seven_day|Week, all models"; do
+    window "$(json_obj "${w%%|*}" "$j")"
+    [ -n "$W_PCT" ] || continue
+    [ -n "$W_RESET" ] && [ "$W_RESET" -le "$now" ] && continue   # that window has reset since
+    printf '%s|%s|%s\n' "${w#*|}" "$W_PCT" "${W_RESET:+in $(dur $(( W_RESET - now )))}$ago"
+  done
+}
+
+# Every account in one table: login, a bar per usage window, when the fullest window resets.
+# Live usage (unless --cached) is checked for all usable accounts at once. MARK, when set, is
+# the target to mark as "this session". Notes for anything that needs a person follow the table.
 cmd_list() {
-  local cached="" tmpd t l mark ok=() all=()
+  local cached="" tmpd t ok=() all=() name st left date use days cell reset top foot="" mk
   [ "${1:-}" = --cached ] && cached=1
   tmpd="$(mktemp -d "${TMPDIR:-/tmp}/relevo-list.XXXXXX")" || die "no temp folder"
   while read -r t; do
     all+=("$t")
-    login_line "$t" > "$tmpd/$t"
-    usable && ok+=("$t") && : > "$tmpd/$t.ok"
+    login_state "$t"
+    printf '%s|%s|%s|%s\n' "$LOGIN" "$EXP_LEFT" "$EXP_DATE" "$(usable && echo 1)" > "$tmpd/$t.login"
+    usable && ok+=("$t")
   done < <(targets)
   [ -z "$cached" ] && [ ${#ok[@]} -gt 0 ] && fetch_live "${ok[@]}"
+  : > "$tmpd/rows"; : > "$tmpd/wins"
   for t in "${all[@]}"; do
-    mark=""; if [ -n "${MARK:-}" ]; then mark="  "; [ "$MARK" = "$t" ] && mark="▶ "; fi
-    printf '%s%-24s %-8s %s\n' "$mark" "$(name_of "$t")" "($t)" "$(cat "$tmpd/$t")"
-    [ -f "$tmpd/$t.ok" ] && usage_lines "$t" | sed 's/^/                                   /'
+    name="$(name_of "$t")"
+    IFS='|' read -r st left date use < "$tmpd/$t.login"
+    reset=""
+    if [ "$st" = out ]; then cell="signed out"; foot="$foot⚠ $name is not signed in: $PROG $name, then /login
+"
+    elif [ "$st" = unknown ]; then cell="unknown"
+    elif [ -z "$left" ]; then cell="ok"
+    elif [ "$left" -le 0 ]; then cell="expired"; foot="$foot⚠ $name's login expired $date: $PROG $name, then /login
+"
+    else
+      days=$(( left / 86400 )); cell="${days}d"; [ "$days" -eq 0 ] && cell="<1d"
+      if [ "$days" -lt "$WARN_DAYS" ]; then
+        cell="$cell!"
+        foot="$foot⚠ $name's login expires in $days day$([ "$days" -eq 1 ] || echo s) ($date): $PROG $name, then /login
+"
+      fi
+    fi
+    if [ "$use" = 1 ]; then
+      windows_of "$t" > "$tmpd/$t.w"
+      sed "s/^/$name|/" "$tmpd/$t.w" >> "$tmpd/wins"
+      top="$(sort -t'|' -k2,2nr "$tmpd/$t.w" | head -1)"
+      if [ -z "$top" ]; then reset="not seen yet"
+      else
+        reset="$(echo "$top" | cut -d'|' -f3)"
+        while IFS='|' read -r wl wp wr; do
+          [ "$wp" -ge 100 ] || continue
+          reset="$reset  ⛔"
+          case "$wl" in Week*) wl=weekly ;; esac
+          foot="$foot⛔ $name is at its $wl limit${wr:+ until $wr}.
+"
+          break
+        done < "$tmpd/$t.w"
+      fi
+    fi
+    mk=" "; [ -n "${MARK:-}" ] && [ "$MARK" = "$t" ] && mk="▶"
+    printf '%s|%s|%s|%s\n' "$name" "$mk" "$cell" "$reset" >> "$tmpd/rows"
   done
+  if [ -n "${MARK:-}" ]; then printf 'Accounts   ▶ this session\n\n'; else printf 'Accounts\n\n'; fi
+  awk -F'|' '
+    function sp(n,  s) { s = ""; while (n-- > 0) s = s " "; return s }
+    function pad(s, n) { return s sp(n - length(s)) }          # s is ASCII here
+    function bar(p,  f, s, i) { f = int(p / 10 + 0.5); if (f > 10) f = 10; s = ""
+      for (i = 0; i < 10; i++) s = s (i < f ? "█" : "░"); return s }
+    FILENAME == ARGV[1] { if (!($2 in seen)) { seen[$2] = 1; lab[++nl] = $2 }; pct[$1 SUBSEP $2] = $3; next }
+    { n++; nm[n] = $1; mk[n] = $2; lg[n] = $3; rs[n] = $4
+      if (length($1) > w) w = length($1); if (length($3) > lw) lw = length($3) }
+    END {
+      if (w < 7) w = 7; if (lw < 5) lw = 5
+      # columns: 5-hour, then the all-models week, then the rest as they first appeared
+      m = 0
+      if ("5-hour" in seen) col[++m] = "5-hour"
+      if ("Week, all models" in seen) col[++m] = "Week, all models"
+      for (i = 1; i <= nl; i++) if (lab[i] != "5-hour" && lab[i] != "Week, all models") col[++m] = lab[i]
+      for (i = 1; i <= nl; i++) lab[i] = col[i]
+      for (i = 1; i <= nl; i++) cw[i] = (length(lab[i]) > 15 ? length(lab[i]) : 15)
+      h = "   " pad("Account", w + 3) pad("Login", lw + 3)
+      for (i = 1; i <= nl; i++) h = h pad(lab[i], cw[i] + 3)
+      print h (nl ? "Resets" : "")
+      for (r = 1; r <= n; r++) {
+        line = " " mk[r] " " pad(nm[r], w + 3) pad(lg[r], lw + 3)
+        for (i = 1; i <= nl; i++) {
+          k = nm[r] SUBSEP lab[i]
+          if (k in pct) c = bar(pct[k]) sprintf(" %3d%%", pct[k]); else c = "—" sp(14)
+          line = line c sp(cw[i] + 3 - 15)
+        }
+        if (rs[r] != "") line = line rs[r]; else sub(/ +$/, "", line)
+        print line
+      }
+    }' "$tmpd/wins" "$tmpd/rows"
+  [ -n "$foot" ] && printf '\n%s' "$foot"
   rm -rf "$tmpd"
   [ -n "${NOTES:-}" ] && printf '%s' "$NOTES"
   return 0
@@ -511,7 +595,6 @@ cmd_list() {
 cmd_account() {
   local cur best
   cur="$(current_target)"
-  echo "Accounts (▶ this session):"
   MARK="$cur" cmd_list "$@"
   [ -n "$cur" ] || return 0
   printf '\nThis session runs on %s.' "$(name_of "$cur")"

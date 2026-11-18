@@ -63,15 +63,20 @@ profile acc4 "old@client.example $(in_days -2)"
 profile acc5 "garbage"
 r names > /dev/null
 out="$(r list)"
-check "main is listed by its name, signed in" line "$out" '^me +\(main\) +signed in · login expires in 20 days'
-check "expiry shown as days and date" has "$out" "login expires in 20 days ($(in_days 20 | cut -c1-10))"
-check "under 5 days is flagged" has "$out" "login expires in 3 days ($(in_days 3 | cut -c1-10))  ← sign in again soon"
-check "20 days is not flagged" hasnt "$(lines_with "$out" 'in 20 days')" "sign in again soon"
-check "signed-out profile" has "$out" "NOT signed in"
-check "expired login says how to sign in again" has "$out" "login expired $(in_days -2 | cut -c1-10)  ← sign in again: relevo old, then /login"
-check "unreadable status" has "$out" "status unknown"
+check "main is listed by its name, with days left" line "$out" '^   me +20d +'
+check "a table with a header row" line "$out" '^   Account +Login'
+check "the title comes first (Claude Code prefixes it with the plugin name)" [ "$(printf '%s\n' "$out" | head -1)" = "Accounts" ]
+check "days left, no warning at 20 days" hasnt "$out" "⚠ me's login"
+check "under 5 days is flagged in the table" line "$out" '^   jane\.doe +3d! '
+check "and explained under it, with the date and what to do" has "$out" "⚠ jane.doe's login expires in 3 days ($(in_days 3 | cut -c1-10)): relevo jane.doe, then /login"
+check "flags never spill into other rows" line "$out" '^   me +20d +$|^   me +20d$|^   me +20d [^!]'
+check "signed-out profile" line "$out" '^   acc3 +signed out'
+check "says how to sign in" has "$out" "⚠ acc3 is not signed in: relevo acc3, then /login"
+check "expired login in the table" line "$out" '^   old +expired'
+check "expired login says how to sign in again" has "$out" "⚠ old's login expired $(in_days -2 | cut -c1-10): relevo old, then /login"
+check "unreadable status" line "$out" '^   acc5 +unknown'
 out="$(EXTRA=RELEVO_WARN_DAYS=25 r list)"
-check "warning threshold is configurable" has "$(lines_with "$out" 'in 20 days')" "sign in again soon"
+check "warning threshold is configurable" line "$out" '^   me +20d! '
 cleanup
 
 setup "names"
@@ -260,10 +265,14 @@ usage "$B/acc2" "Current session: 100% used · resets 4pm (Europe/Paris)\nCurren
 usage "$B/acc3" "  Current session: 5% used · resets 5pm\n  Current week (\"Fable\"): 9% used"
 for d in "$H/.claude" "$B/acc2" "$B/acc3"; do echo 2 > "$d/fake-usage-delay"; done
 start=$SECONDS; out="$(r list)"; took=$(( SECONDS - start ))
-check "live lines under each signed-in account" has "$out" "Current week (all models): 71% used · resets Nov 22"
-check "indented under the account" line "$out" '^ {30,}Current session: 12% used · resets 3pm \(Europe/Paris\)$'
+check "a bar and percent per window" line "$out" '^   jane +20d +██████████ 100% +███████░░░  71% '
+check "columns: 5-hour, all-models week, then the rest" line "$out" '^   Account +Login +5-hour +Week, all models +Week, "Fable" +Resets$'
+check "Resets shows the fullest window, without the time zone" line "$out" '^   me .*Nov 22 6:30am$'
+check "time zones are dropped" hasnt "$out" "Europe/Paris"
+check "a full window is marked and explained" has "$out" "⛔ jane is at its 5-hour limit until 4pm."
+check "the full row ends with its mark" line "$out" '^   jane .* 4pm  ⛔$'
 check "'Last …' and 'Top …' lines are dropped" hasnt "$out" "Top model"
-check "escaped quotes come through" has "$out" 'Current week ("Fable"): 9% used'
+check "escaped quotes come through" line "$out" '^   bob .*█░░░░░░░░░   9%'
 check "no check for a signed-out account" [ "$(calls "$B/acc4")" = 0 ]
 check "checks run in parallel (3 × 2 s in under 5 s)" [ "$took" -lt 5 ]
 check "main is checked with CLAUDE_CONFIG_DIR unset" [ "$(calls UNSET)" = 1 ]
@@ -276,7 +285,7 @@ r list > /dev/null
 check "an older result is checked again" [ "$(calls "$B/acc2")" = 2 ]
 rm -f "$B/.usage/"*.live; out="$(r list --cached)"
 check "--cached runs no check" [ "$(calls "$B/acc2")" = 2 ]
-check "--cached falls back to the last-seen line" has "$out" "usage: not seen yet"
+check "--cached with nothing seen says so" line "$out" '^   jane +20d +not seen yet$'
 check "live results are private" [ "$(mode "$B/.usage")" = 700 ]
 cleanup
 
@@ -289,11 +298,11 @@ seen_json acc2 12.4 7530 40 274000 300
 start=$SECONDS; out="$(EXTRA=RELEVO_USAGE_TIMEOUT=2 r list)"; took=$(( SECONDS - start ))
 check "a slow account is stopped at the timeout" [ "$took" -lt 6 ]
 check "its check was cut off" hasnt "$(log)" "usage-done cfg=$B/acc2"
-check "it shows what the status line last saw" has "$out" "usage: 5h 12% used, resets in 2h05m · 7d 40% used, resets in 3d4h   (seen 5 min ago)"
+check "it shows what the status line last saw, with its age" line "$out" '^   jane +20d +█░░░░░░░░░  12% +████░░░░░░  40% +in 3d4h, seen 5m ago$'
 seen_json acc2 100 -60 40 274000 7300
 out="$(r list --cached)"
-check "a window whose reset has passed says so" has "$out" "usage: 5h reset since · 7d 40% used"
-check "old sightings in hours" has "$out" "(seen 2 h ago)"
+check "a window whose reset has passed is left out" hasnt "$out" "100%"
+check "old sightings in hours" has "$out" "in 3d4h, seen 2h ago"
 cleanup
 
 setup "usage: a check that ran a model turn is not trusted"
@@ -308,8 +317,8 @@ setup "usage: noisy output"
 auth "$H/.claude" "me@home.example $(in_days 20)"
 usage "$H/.claude" "Current session: 12% used · resets 3pm\nCurrent week (all models): 40% used"; : > "$H/.claude/fake-usage-noisy"
 out="$(r list)"
-check "raw control characters inside the JSON string are tolerated" has "$out" "Current week (all models): 40% used"
-check "the first line survives its raw escape" line "$out" '^ +Current session: 12% used · resets 3pm$'
+check "raw control characters inside the JSON string are tolerated" line "$out" '^   main +20d +█░░░░░░░░░  12% +████░░░░░░  40%$'
+check "the first line survives its raw escape" line "$out" '^   Account +Login +5-hour +Week, all models +Resets$'
 check "stderr is never mixed into what is parsed or shown" hasnt "$out" "slow start"
 check "no control characters reach the output" bash -c "! printf '%s' \"\$1\" | LC_ALL=C grep -q \"\$(printf '[\\033\\r]')\"" _ "$out"
 cleanup
@@ -400,8 +409,9 @@ profile acc3 "bob@client.example $(in_days 20)"
 r names > /dev/null
 usage "$B/acc2" "Current session: 100% used · resets 4pm"; usage "$B/acc3" "Current session: 10% used"
 out="$(EXTRA=RELEVO_PROFILE=acc2 r account)"
-check "marks this session's account" line "$out" '^▶ jane +\(acc2\)'
-check "the others are not marked" line "$out" '^  bob +\(acc3\)'
+check "marks this session's account" line "$out" '^ ▶ jane +20d'
+check "the others are not marked" line "$out" '^   bob +20d'
+check "the title says what the mark means" [ "$(printf '%s\n' "$out" | head -1)" = "Accounts   ▶ this session" ]
 check "says where to continue when at a limit" has "$out" "This session runs on jane. It is at a usage limit; to continue this conversation on bob:  /switch bob"
 usage "$B/acc2" "Current session: 10% used"; rm -f "$B/.usage/"*.live
 out="$(EXTRA=RELEVO_PROFILE=acc2 r account)"
@@ -414,7 +424,7 @@ r new acc2 > /dev/null
 EXTRA=RELEVO_WARN_DAYS=25 r _sync
 check "_sync saves the warning days" [ "$(cat "$B/.prefs")" = "warn_days=25" ]
 out="$(r list --cached)"
-check "the terminal CLI uses them" has "$(lines_with "$out" 'in 20 days')" "sign in again soon"
+check "the terminal CLI uses them" line "$out" '^   main +20d! '
 cleanup
 
 # ---------------------------------------------------------------------------------------------

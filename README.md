@@ -14,11 +14,11 @@ never switches an account by itself.
 
 ```text
 $ relevo list
-me                       (main)   signed in · login expires in 25 days (2026-12-14)
-                                   Current week (all models): 71% used · resets Nov 22
-jane.doe                 (acc2)   signed in · login expires in 27 days (2026-12-16)
-                                   Current session: 12% used · resets 3pm (Europe/Paris)
-                                   Current week (all models): 40% used · resets Nov 22
+Accounts
+
+   Account    Login   5-hour            Week, all models   Resets
+   me         25d     —                 ███████░░░  71%    Nov 22 6:30am
+   jane.doe   27d     █░░░░░░░░░  12%   ████░░░░░░  40%    Nov 22 6:30am
 
 $ relevo jane.doe          # Claude Code, signed in as jane.doe
 > /switch me               # same conversation, now on the "me" account
