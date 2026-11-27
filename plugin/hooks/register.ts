@@ -12,12 +12,14 @@ const CLI = 'relevo'
 // What /relevo runs inside a session besides `switch`, which is handled below. Never `run`/
 // `<name>` (that would start a nested Claude Code) or `add` (a browser sign-in belongs in a
 // terminal). Must equal IN_SESSION in bin/relevo; test/run.sh checks that it does.
-const IN_SESSION = ['account', 'default', 'list', 'rename', 'names', 'new', 'fix', 'install', 'help']
+const IN_SESSION = ['account', 'default', 'list', 'rename', 'names', 'new', 'fix', 'shell', 'install', 'help']
 // An account name, as bin/relevo's NAME_RE: never an option, so a typed word can't pass flags.
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const SWITCH_USAGE = `usage: /${CLI} switch <name>   (${CLI} list shows the names)`
 const STAY = 'Stay on this account'
 const ANYWAY = 'Switch anyway'
+const ADD = 'Add the line'
+const NOT_NOW = 'Not now'
 
 // Runs the CLI with the session's environment (session id, Claude's process id, project dir)
 // on top of Claude Code's own, so it knows which profile and session it serves.
@@ -41,6 +43,23 @@ function closeSoon($: EngineInterface, pid: string | undefined) {
   })
 }
 
+// Offer to make plain `claude` start through relevo (relevo shell --add). Asked only when the CLI
+// says the line is absent and it knows the file; only the person's "Add the line" writes it.
+async function offerShellLine($: EngineInterface, warnDays: string, why: string) {
+  const st = await relevo($, ['_shell'], warnDays)
+  const [state, ...file] = st.text.split(' ')
+  if (st.code !== 0 || state !== 'absent' || file.length === 0) return ''
+  const pick = await $.ui
+    .ask(`${why} This adds one line to ${file.join(' ')}; relevo shell --remove takes it out.`, {
+      header: 'Shell line',
+      options: [ADD, NOT_NOW],
+    })
+    .catch(() => NOT_NOW)
+  if (pick !== ADD) return ''
+  return (await relevo($, ['shell', '--add'], warnDays)).text
+}
+const withOffer = (text: string, extra: string) => (extra ? `${text}\n${extra}` : text)
+
 // /relevo switch <name>: exactly one account name, nothing else. The CLI checks and writes the
 // switch request; at a usage limit (exit 4) the person decides, never this module, and only
 // their "Switch anyway" adds --anyway.
@@ -56,6 +75,11 @@ async function switchTo($: EngineInterface, words: readonly string[], warnDays: 
     ran = await relevo($, ['_switch', name, '--anyway'], warnDays)
   }
   if (ran.code === 0) closeSoon($, ran.pid)
+  // Exit 5: this session can't reopen itself, and plain claude doesn't go through relevo yet.
+  if (ran.code === 5) {
+    const why = 'Make plain `claude` start through Relevo, so /relevo switch reopens by itself next time?'
+    return withOffer(ran.text, await offerShellLine($, warnDays, why))
+  }
   return ran.text
 }
 
@@ -66,8 +90,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: CLI,
-      description: 'Accounts: switch, account, default, list, rename, names, install',
-      argumentHint: 'switch <name> | account | default [<name>] | list | rename <name> <new> | names | install',
+      description: 'Accounts: switch, account, default, list, rename, names, shell, install',
+      argumentHint: 'switch <name> | account | default [<name>] | list | rename <name> <new> | names | shell | install',
     })
     // Save the plugin's settings for the terminal CLI, and keep the copy on PATH current.
     void relevo($, ['_sync'], warnDays).catch(() => undefined)
@@ -87,6 +111,11 @@ export const register: Register = (on, options) => {
       }
     }
     const ran = await relevo($, args.length ? args : ['help'], warnDays)
+    if (sub === 'install' && args.length === 1 && ran.code === 0) {
+      const why =
+        'Also make plain `claude` start through Relevo? New sessions then open the account you last switched to, and /relevo switch always reopens in place.'
+      return { text: withOffer(ran.text, await offerShellLine($, warnDays, why)), isTextDisplayOnly: true }
+    }
     return { text: ran.text, isTextDisplayOnly: true }
   })
 

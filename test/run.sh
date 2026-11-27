@@ -165,12 +165,22 @@ setup "not started via relevo"
 auth "$H/.claude" "me@home.example $(in_days 20)"
 profile acc2 "jane@work.example $(in_days 20)"
 r names > /dev/null
-out="$(EXTRA="CLAUDE_CODE_SESSION_ID=$SID CLAUDE_PROJECT_DIR=$T/proj" r _switch jane)"; code=$?
+# SHELL set to a shell relevo doesn't write for (bash fills an unset SHELL from the login shell)
+out="$(EXTRA="SHELL=/usr/bin/fish CLAUDE_CODE_SESSION_ID=$SID CLAUDE_PROJECT_DIR=$T/proj" r _switch jane)"; code=$?
 check "prints the manual command" has "$out" "Exit, then run:  cd $T/proj && relevo jane --resume $SID"
 check "exits 3 (nothing to close)" [ "$code" = 3 ]
 check "the chosen account still becomes the default" [ "$(cat "$B/.default")" = acc2 ]
 check "says so" has "$out" "New sessions (relevo start) now open as jane."
-check "says how to make switching automatic" has "$out" 'add to your shell profile:  claude() { relevo start "$@"; }'
+check "with no shell it knows, says how to make switching automatic" has "$out" 'add to your shell profile:  command -v relevo > /dev/null && function claude { relevo start "$@"; }'
+check "and writes no shell profile" [ ! -e "$H/.zshrc" ] && [ ! -e "$H/.bashrc" ] && [ ! -e "$H/.bash_profile" ]
+out="$(EXTRA="SHELL=/bin/zsh CLAUDE_CODE_SESSION_ID=$SID" r _switch jane)"; code=$?
+check "zsh without the line: exit 5, so the plugin can offer it" [ "$code" = 5 ]
+check "still prints the manual command" has "$out" "relevo jane --resume $SID"
+check "and still writes no shell profile" [ ! -e "$H/.zshrc" ]
+printf 'claude() { relevo start "$@"; }\n' > "$H/.zshrc"
+out="$(EXTRA="SHELL=/bin/zsh CLAUDE_CODE_SESSION_ID=$SID" r _switch jane)"; code=$?
+check "line already there: explains this session is older than it" has "$out" "This session started before plain claude went through relevo (~/.zshrc); run the command above once."
+check "and exits 3" [ "$code" = 3 ]
 out="$(EXTRA="CLAUDE_CODE_SESSION_ID=$SID RELEVO_WRAPPER=999999" r _switch jane)"
 check "a wrapper that is gone counts as not started via relevo" has "$out" "was not started with relevo"
 out="$(EXTRA="CLAUDE_CODE_SESSION_ID=nope RELEVO_WRAPPER=$$" r _switch jane)"; code=$?
@@ -225,6 +235,92 @@ check "inside a Claude Code session, start keeps that session's account and adds
 : > "$T/claude.log"; EXTRA="CLAUDECODE=1" r start > /dev/null
 check "and never applies the default there" has "$(log)" "run cfg=UNSET profile= "
 check "start and default are never profile folders" [ "$( (r new start; r new default) | grep -c "is a relevo command")" = 2 ]
+cleanup
+
+setup "shell line"
+MARK="# relevo: plain claude opens your default account (relevo shell --remove takes this out)"
+LINE='command -v relevo > /dev/null && function claude { relevo start "$@"; }'
+Z() { EXTRA="SHELL=/bin/zsh ${ZX:-}" r "$@"; }
+check "zsh: the file is ~/.zshrc and the line is absent" [ "$(Z _shell)" = "absent ~/.zshrc" ]
+out="$(Z install)"
+check "a terminal install suggests the line" has "$out" "To make plain claude open your default account: relevo shell --add"
+check "a terminal install never writes it" [ ! -e "$H/.zshrc" ]
+out="$(EXTRA="SHELL=/bin/zsh CLAUDE_CODE_SESSION_ID=$SID" r install)"
+check "an in-session install leaves the question to the plugin" hasnt "$out" "shell --add"
+printf 'export A=1\n' > "$H/.zshrc"; cp "$H/.zshrc" "$T/orig"
+out="$(Z shell --add)"; code=$?
+check "--add exits 0" [ "$code" = 0 ]
+check "--add says where" has "$out" "Added to ~/.zshrc"
+check "--add appends the mark and the line after a blank line" [ "$(tail -3 "$H/.zshrc")" = "$(printf '\n%s\n%s' "$MARK" "$LINE")" ]
+check "what was there is kept" [ "$(head -1 "$H/.zshrc")" = "export A=1" ]
+check "now ours" [ "$(Z _shell)" = "ours ~/.zshrc" ]
+out="$(Z shell --add)"; code=$?
+check "a second --add changes nothing" [ "$(grep -cxF "$LINE" "$H/.zshrc")" = 1 ]
+check "and exits 3" [ "$code" = 3 ]
+check "status says it goes through relevo" has "$(Z shell)" "Plain claude goes through relevo (~/.zshrc)."
+mkdir -p "$T/bin"; ln -s "$CLI" "$T/bin/relevo"
+got="$(cd "$T/proj" && env -i HOME="$H" PATH="$T/bin:$ROOT/test/fake:/usr/bin:/bin" FAKE_LOG="$T/claude.log" FAKE_PLAN="$T/plan" \
+  bash -c 'source "$1"; type -t claude; claude --model x' _ "$H/.zshrc" 2>&1)"
+check "the line defines claude in a shell" has "$got" "function"
+check "and plain claude goes through relevo start" has "$(log)" "run cfg=UNSET profile=main pwd=$T/proj args=--model x"
+if command -v zsh > /dev/null; then
+  : > "$T/claude.log"
+  (cd "$T/proj" && env -i HOME="$H" PATH="$T/bin:$ROOT/test/fake:/usr/bin:/bin" FAKE_LOG="$T/claude.log" FAKE_PLAN="$T/plan" \
+    zsh -fc 'alias claude="echo alias"; source "$1"; unalias claude; claude' _ "$H/.zshrc" > /dev/null 2>&1)
+  check "zsh: the line works even where an alias named claude exists when it is read" has "$(log)" "run cfg=UNSET profile=main"
+fi
+out="$(Z shell --remove)"; code=$?
+check "--remove exits 0" [ "$code" = 0 ]
+check "--remove restores the file byte for byte" cmp -s "$H/.zshrc" "$T/orig"
+out="$(Z shell --remove)"; code=$?
+check "nothing left to remove: exit 3" [ "$code" = 3 ]
+printf 'export A=1' > "$H/.zshrc"; Z shell --add > /dev/null
+check "a file without a final newline gets one before the mark" [ "$(sed -n 1p "$H/.zshrc")" = "export A=1" ] && [ "$(sed -n 2p "$H/.zshrc")" = "" ]
+Z shell --remove > /dev/null
+printf '# mine\nclaude() { relevo start "$@"; }\n' > "$H/.zshrc"; cp "$H/.zshrc" "$T/orig"
+check "a line the person wrote counts as present" [ "$(Z _shell)" = "present ~/.zshrc" ]
+out="$(Z shell --add)"; check "--add leaves it alone" cmp -s "$H/.zshrc" "$T/orig"
+out="$(Z shell --remove)"; code=$?
+check "--remove never touches a line relevo did not add" cmp -s "$H/.zshrc" "$T/orig"
+check "and says which line to remove" has "$out" "remove it yourself (line 2)"
+check "and exits 3" [ "$code" = 3 ]
+for own in "alias claude='claude --verbose'" "claude () { command claude --verbose \"\$@\"; }" "function claude { command claude; }"; do
+  printf '%s\n' "$own" > "$H/.zshrc"; cp "$H/.zshrc" "$T/orig"
+  st="$(Z _shell)"; out="$(Z shell --add)"; code=$?
+  check "their own claude ($own) is a conflict" [ "$st" = "conflict ~/.zshrc" ]
+  check "and --add leaves the file alone ($own)" cmp -s "$H/.zshrc" "$T/orig"
+  check "and exits 3 ($own)" [ "$code" = 3 ]
+done
+rm -f "$H/.zshrc"; mkdir -p "$T/dotfiles"; printf 'export B=2\n' > "$T/dotfiles/zshrc"; ln -s "$T/dotfiles/zshrc" "$H/.zshrc"
+Z shell --add > /dev/null
+check "a symlinked profile stays a symlink" [ -L "$H/.zshrc" ]
+check "and the line lands in its target" grep -qxF "$LINE" "$T/dotfiles/zshrc"
+Z shell --remove > /dev/null
+check "--remove keeps the symlink too" [ -L "$H/.zshrc" ] && [ "$(cat "$T/dotfiles/zshrc")" = "export B=2" ]
+if [ "$(id -u)" != 0 ]; then
+  chmod 444 "$T/dotfiles/zshrc"; out="$(Z shell --add)"; code=$?
+  check "a read-only profile: exit 1" [ "$code" = 1 ]
+  check "and the line to add by hand" has "$out" "could not write ~/.zshrc; add this line yourself:  $LINE"
+  chmod 644 "$T/dotfiles/zshrc"
+fi
+mkdir -p "$T/zd"; ZX="ZDOTDIR=$T/zd" Z shell --add > /dev/null
+check "ZDOTDIR is where zsh reads .zshrc" grep -qxF "$LINE" "$T/zd/.zshrc"
+rm -f "$H/.zshrc"
+for sh in /usr/bin/fish /bin/tcsh ""; do
+  out="$(EXTRA="SHELL=$sh" r shell --add)"; code=$?
+  check "unknown shell ($sh): exit 3 and the line to add by hand" [ "$code" = 3 ] && has "$out" "Add this to your shell profile yourself:  $LINE"
+done
+check "unknown shells: no profile written" [ ! -e "$H/.zshrc" ] && [ ! -e "$H/.bashrc" ] && [ ! -e "$H/.bash_profile" ]
+if [ "$(uname -s)" = Darwin ]; then
+  check "macOS bash without ~/.bash_profile: nothing it is sure of" [ "$(EXTRA=SHELL=/bin/bash r _shell)" = "unsupported " ]
+  printf '. ~/.bashrc\n' > "$H/.bash_profile"
+  check "macOS bash whose ~/.bash_profile reads ~/.bashrc: ~/.bashrc" [ "$(EXTRA=SHELL=/bin/bash r _shell)" = "absent ~/.bashrc" ]
+  printf 'export C=3\n' > "$H/.bash_profile"
+  check "macOS bash otherwise: ~/.bash_profile" [ "$(EXTRA=SHELL=/bin/bash r _shell)" = "absent ~/.bash_profile" ]
+else
+  check "bash: ~/.bashrc" [ "$(EXTRA=SHELL=/bin/bash r _shell)" = "absent ~/.bashrc" ]
+fi
+check "shell is never an account name" has "$(r new shell)" "is a relevo command"
 cleanup
 
 setup "tampered switch request"

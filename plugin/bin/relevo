@@ -16,7 +16,7 @@
 #
 # `relevo start` opens the default account: the one you last switched to, or the one set with
 # `relevo default <name>`. To have plain `claude` do the same (and so every session can switch in
-# place), add to your shell profile:  claude() { relevo start "$@"; }
+# place), `relevo shell --add` adds one line to your shell profile; /relevo install offers it.
 #
 # Never reads or prints credentials. Never touches the default profile's login. A profile's
 # folder is never renamed: Claude Code ties the login to the folder's path.
@@ -33,11 +33,11 @@ UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 NAME_RE='^[a-z0-9][a-z0-9._-]{0,63}$'
 # The commands /relevo runs inside a Claude Code session, besides `switch` (which the plugin
 # handles itself). plugin/hooks/register.ts allows exactly these; a test keeps the two equal.
-IN_SESSION="account default list rename names new fix install help"
+IN_SESSION="account default list rename names new fix shell install help"
 USAGE_DIR="$BASE/.usage"        # <t>.json last-seen status-line usage, <t>.live /usage lines,
                                 # <t>.login login-expiry cache, <t>.limited last rate-limit stop
 PREFS="$BASE/.prefs"            # warn_days=N, written from the plugin's settings at session start
-RESERVED=" main add list account statusline names new fix run rename install help start default "
+RESERVED=" main add list account statusline names new fix run rename install help start default shell "
 NOTES=""                        # warnings collected while checking usage
 LIVE_TTL=60                     # seconds a live /usage result is reused
 USAGE_TIMEOUT="${RELEVO_USAGE_TIMEOUT:-20}"; [[ "$USAGE_TIMEOUT" =~ ^[0-9]{1,3}$ ]] || USAGE_TIMEOUT=20
@@ -373,8 +373,13 @@ cmd_switch() {
   if [ -z "${RELEVO_WRAPPER:-}" ] || ! [[ "$RELEVO_WRAPPER" =~ ^[0-9]+$ ]] || ! kill -0 "$RELEVO_WRAPPER" 2>/dev/null; then
     printf 'This session was not started with %s, so it cannot reopen itself.\nExit, then run:  cd %q && %s %s --resume %s\n%s\n' \
       "$PROG" "$dir" "$PROG" "$want" "$sid" "$(remember "$to" "$want")"
-    printf 'So that /%s switch reopens sessions by itself, add to your shell profile:  claude() { %s start "$@"; }\n' \
-      "$PROG" "$PROG"
+    shell_state
+    case "$STATE" in
+      ours|present) echo "This session started before plain claude went through $PROG ($(tilde "$RC")); run the command above once." ;;
+      absent) exit 5 ;;   # the plugin offers to add the shell line
+      conflict) echo "So that /$PROG switch reopens by itself, replace your own claude alias or function in $(tilde "$RC") with:  $SHELL_LINE" ;;
+      *) echo "So that /$PROG switch reopens by itself, add to your shell profile:  $SHELL_LINE" ;;
+    esac
     exit 3
   fi
   mkdir -p "$SWITCH_DIR" && chmod 700 "$SWITCH_DIR" || die "could not create $SWITCH_DIR"
@@ -407,6 +412,86 @@ cmd_default() {
 cmd_start() {
   [ -n "${CLAUDECODE:-}" ] && exec claude "$@"
   run_loop "$(default_target)" "$@"
+}
+
+# --- the shell line: plain `claude` through relevo start -----------------------------------------
+# Written only when the person asks (relevo shell --add, or "Add the line" in /relevo install or
+# /relevo switch), always as these two lines, so --remove can take out exactly what was added.
+# `function claude {` rather than `claude() {`: an alias named claude is not expanded there.
+SHELL_MARK="# relevo: plain claude opens your default account (relevo shell --remove takes this out)"
+SHELL_LINE='command -v relevo > /dev/null && function claude { relevo start "$@"; }'
+tilde() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
+
+# The profile file of the person's shell that interactive shells read; empty when unsure.
+# macOS bash reads only the first of ~/.bash_profile, ~/.bash_login, ~/.profile, so a new
+# ~/.bash_profile could hide the others: without one, Relevo writes nothing.
+shell_rc() {
+  case "$(basename "${SHELL:-}")" in
+    zsh)  echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) if [ "$(uname -s)" != Darwin ]; then echo "$HOME/.bashrc"
+          elif [ -f "$HOME/.bash_profile" ]; then
+            if grep -q 'bashrc' "$HOME/.bash_profile"; then echo "$HOME/.bashrc"; else echo "$HOME/.bash_profile"; fi
+          fi ;;
+  esac
+}
+# Sets RC and STATE: unsupported (no file we are sure of), ours (our two lines), present (a
+# relevo start line the person wrote), conflict (their own claude alias or function), absent.
+shell_state() {
+  RC="$(shell_rc)"
+  if [ -z "$RC" ]; then STATE=unsupported
+  elif [ ! -f "$RC" ]; then STATE=absent
+  elif grep -qxF "$SHELL_MARK" "$RC" && grep -qxF "$SHELL_LINE" "$RC"; then STATE=ours
+  elif grep -qE '^[^#]*relevo start' "$RC"; then STATE=present
+  elif grep -qE '^[[:space:]]*(alias[[:space:]]+claude=|claude[[:space:]]*\(\)|function[[:space:]]+claude([[:space:](){]|$))' "$RC"; then STATE=conflict
+  else STATE=absent; fi
+}
+
+# relevo shell [--add|--remove]: whether plain claude goes through relevo; add or remove the line.
+# Exit 0: done (or status shown). 3: nothing to do, the printed line says why. 1: error.
+cmd_shell() {
+  local t tmp
+  shell_state; t="$(tilde "$RC")"
+  case "${1:-}" in
+    "")
+      case "$STATE" in
+        ours|present) echo "Plain claude goes through $PROG ($t)." ;;
+        absent)       echo "Plain claude does not go through $PROG yet. $PROG shell --add adds one line to $t." ;;
+        conflict)     echo "$t has its own claude alias or function, so $PROG leaves it alone. To go through $PROG, replace it with:  $SHELL_LINE" ;;
+        *)            echo "$PROG can't tell which file your shell reads. Add this to your shell profile yourself:  $SHELL_LINE" ;;
+      esac ;;
+    --add)
+      case "$STATE" in
+        ours|present) echo "Plain claude already goes through $PROG ($t)."; exit 3 ;;
+        conflict) echo "$t has its own claude alias or function; nothing changed. To go through $PROG, replace it with:  $SHELL_LINE"; exit 3 ;;
+        unsupported) echo "$PROG can't tell which file your shell reads; nothing changed. Add this to your shell profile yourself:  $SHELL_LINE"; exit 3 ;;
+      esac
+      # append in place (never replace the file): a symlinked profile stays a symlink
+      if { if [ -s "$RC" ]; then [ -n "$(tail -c 1 "$RC")" ] && echo; echo; fi
+           printf '%s\n%s\n' "$SHELL_MARK" "$SHELL_LINE"; } 2>/dev/null >> "$RC"; then
+        echo "Added to $t: plain claude now opens your default account, in new terminals (or after: source $t)."
+      else
+        die "could not write $t; add this line yourself:  $SHELL_LINE"
+      fi ;;
+    --remove)
+      case "$STATE" in
+        present) echo "The line in $t was not added by $PROG; remove it yourself (line $(grep -nE '^[^#]*relevo start' "$RC" | head -1 | cut -d: -f1))."; exit 3 ;;
+        ours) ;;
+        *) echo "Nothing to remove: $PROG added no line${RC:+ to $t}."; exit 3 ;;
+      esac
+      tmp="$(mktemp "${TMPDIR:-/tmp}/relevo-rc.XXXXXX")" || die "could not make a temporary file"
+      # our two lines, and the blank line --add put before them
+      awk -v m="$SHELL_MARK" -v l="$SHELL_LINE" '
+        { line[NR] = $0 }
+        END {
+          for (i = 1; i <= NR; i++) if (line[i] == m && line[i + 1] == l) {
+            skip[i] = 1; skip[i + 1] = 1; if (i > 1 && line[i - 1] == "") skip[i - 1] = 1
+          }
+          for (i = 1; i <= NR; i++) if (!skip[i]) print line[i]
+        }' "$RC" > "$tmp" && cat "$tmp" > "$RC" || { rm -f "$tmp"; die "could not write $t"; }
+      rm -f "$tmp"
+      echo "Removed from $t: plain claude no longer goes through $PROG, in new terminals." ;;
+    *) die "usage: $PROG shell [--add|--remove]" ;;
+  esac
 }
 
 cmd_names() {
@@ -723,6 +808,7 @@ in_session_line() {  # subcommand -> "usage|what it does" for the help
     switch)  echo "switch <name>|continue this conversation on another account" ;;
     account) echo "account|your accounts: login and usage, this session marked" ;;
     default) echo "default [<name>]|the account new sessions open as; set it" ;;
+    shell)   echo "shell [--add|--remove]|plain claude through relevo: show, add, remove" ;;
     list)    echo "list|the same table, without the mark" ;;
     rename)  echo "rename <name> <new>|give an account another name" ;;
     names)   echo "names|name every account after its email" ;;
@@ -791,6 +877,12 @@ cmd_install() {
     *":$HOME/.local/bin:"*) echo "Run $PROG list in a terminal to check it." ;;
     *) echo "~/.local/bin is not on your PATH yet; add it in your shell profile, then run $PROG list." ;;
   esac
+  # inside a session the plugin asks about the shell line itself
+  if [ -z "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    shell_state
+    [ "$STATE" = absent ] && echo "To make plain claude open your default account: $PROG shell --add"
+  fi
+  return 0
 }
 copy_self() {  # atomic replace, so a running copy is never half-written
   local tmp
@@ -818,6 +910,8 @@ case "$cmd" in
   _login_cache) [[ "${2:-}" =~ $NAME_RE ]] && { [ "$2" = main ] || [ -d "$BASE/$2" ]; } && login_state "$2" ;;
   statusline) cmd_statusline ;;
   start)   shift; cmd_start "$@" ;;
+  shell)   shift; cmd_shell "$@" ;;
+  _shell)  shell_state; echo "$STATE $(tilde "$RC")" ;;
   default) shift; cmd_default "$@" ;;
   account) shift; cmd_account "$@" ;;
   add)     shift; cmd_add "$@" ;;

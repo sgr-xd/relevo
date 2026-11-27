@@ -38,13 +38,11 @@ macOS or Linux, Claude Code 2.1.327 or later.
    /relevo install
    ```
    This links `~/.local/bin/relevo`. Check it in a new terminal with `relevo list`.
+   It then asks whether plain `claude` should start through Relevo. Say yes, and new sessions
+   open the account you last switched to, and every session can switch in place. It adds one
+   line, marked with a comment, to your shell profile; `relevo shell --remove` takes it out.
 3. Add your accounts: `relevo add you@work.example`. Claude Code's own sign-in page opens in
    the browser. Add `--sso` for single sign-on.
-4. Optional: so plain `claude` opens the account you last switched to, and every session can
-   switch in place, add to `~/.zshrc` or `~/.bashrc`:
-   ```sh
-   command -v relevo > /dev/null && claude() { relevo start "$@"; }
-   ```
 
 The rest of setup, every command and the status line are in [docs/USAGE.md](docs/USAGE.md).
 
