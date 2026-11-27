@@ -157,6 +157,7 @@ check "expired login" has "$L" "switch-exit=3 out=old is not signed in (login ex
 check "no name" has "$L" "switch-exit=3 out=usage: /relevo switch <name>"
 check "path in name" has "$L" "switch-exit=3 out=No account named 'a/b'"
 check "no session reopened after a refusal" [ "$(grep -c '^run ' "$T/claude.log")" = 6 ]
+check "a refused switch leaves the default alone" [ ! -e "$B/.default" ]
 check "no request left behind" [ -z "$(ls -A "$B/.switch")" ]
 cleanup
 
@@ -167,11 +168,63 @@ r names > /dev/null
 out="$(EXTRA="CLAUDE_CODE_SESSION_ID=$SID CLAUDE_PROJECT_DIR=$T/proj" r _switch jane)"; code=$?
 check "prints the manual command" has "$out" "Exit, then run:  cd $T/proj && relevo jane --resume $SID"
 check "exits 3 (nothing to close)" [ "$code" = 3 ]
+check "the chosen account still becomes the default" [ "$(cat "$B/.default")" = acc2 ]
+check "says so" has "$out" "New sessions (relevo start) now open as jane."
+check "says how to make switching automatic" has "$out" 'add to your shell profile:  claude() { relevo start "$@"; }'
 out="$(EXTRA="CLAUDE_CODE_SESSION_ID=$SID RELEVO_WRAPPER=999999" r _switch jane)"
 check "a wrapper that is gone counts as not started via relevo" has "$out" "was not started with relevo"
 out="$(EXTRA="CLAUDE_CODE_SESSION_ID=nope RELEVO_WRAPPER=$$" r _switch jane)"; code=$?
 check "outside a Claude Code session" has "$out" "doesn't look like a Claude Code session"
 check "no request written" no_request
+cleanup
+
+setup "default account"
+auth "$H/.claude" "me@home.example $(in_days 20)"
+profile acc2 "jane@work.example $(in_days 20)"
+profile acc3 "bob@client.example $(in_days 20)"
+r names > /dev/null
+echo "exit 5" > "$T/plan"
+out="$(r start --model x)"; code=$?
+check "with no default, start opens main" has "$(log)" "run cfg=UNSET profile=main pwd=$T/proj args=--model x"
+check "start keeps claude's exit code" [ "$code" = 5 ]
+check "default shows main" has "$(r default)" "New sessions (relevo start) open as me."
+printf 'switch bob\nexit 0\n' > "$T/plan"; rm -f "$T/plan.n"; : > "$T/claude.log"
+out="$(r jane)"
+check "a switch makes that account the default" [ "$(cat "$B/.default")" = acc3 ]
+check "the default file is private" [ "$(mode "$B/.default")" = 600 ]
+check "the switch says so" has "$(log)" "switch-exit=0 out=Switching to bob: this session closes and reopens as bob with the same conversation. New sessions (relevo start) now open as bob."
+: > "$T/plan"; rm -f "$T/plan.n"; : > "$T/claude.log"
+r start > /dev/null
+check "start opens the account last switched to, inside the wrapper" has "$(log)" "run cfg=$B/acc3 profile=acc3"
+: > "$T/claude.log"; r me > /dev/null
+check "starting an account by name does not change the default" [ "$(cat "$B/.default")" = acc3 ]
+out="$(r default jane)"
+check "default <name> sets it" [ "$(cat "$B/.default")" = acc2 ]
+check "and says so" has "$out" "New sessions (relevo start) now open as jane."
+out="$(r default main)"
+check "default main works" [ "$(cat "$B/.default")" = main ]
+out="$(r default nobody)"; code=$?
+check "an unknown name is refused" has "$out" "no account named 'nobody'"
+check "and exits 1" [ "$code" = 1 ]
+out="$(r default ../acc2)"; check "a path is refused" has "$out" "names use a-z"
+check "refusals keep the default" [ "$(cat "$B/.default")" = main ]
+printf '../../etc\n' > "$B/.default"; : > "$T/claude.log"
+out="$(r start)"
+check "a tampered default opens main" has "$(log)" "run cfg=UNSET profile=main"
+check "and says the default is gone" has "$out" "the default account no longer exists; using me"
+printf 'acc9\n' > "$B/.default"; : > "$T/claude.log"
+r start > /dev/null
+check "a default whose profile was removed opens main" has "$(log)" "run cfg=UNSET profile=main"
+ln -s "$B/acc2" "$B/acc7"; printf 'acc7\n' > "$B/.default"; : > "$T/claude.log"
+r start > /dev/null
+check "a symlinked profile is never a default" has "$(log)" "run cfg=UNSET profile=main"
+rm "$B/acc7"; printf 'acc3\n' > "$B/.default"; : > "$T/claude.log"
+EXTRA="CLAUDECODE=1 CLAUDE_CONFIG_DIR=$B/acc2" r start -p hi > /dev/null
+check "inside a Claude Code session, start keeps that session's account and adds no wrapper" \
+  has "$(log)" "run cfg=$B/acc2 profile= pwd=$T/proj args=-p hi"
+: > "$T/claude.log"; EXTRA="CLAUDECODE=1" r start > /dev/null
+check "and never applies the default there" has "$(log)" "run cfg=UNSET profile= "
+check "start and default are never profile folders" [ "$( (r new start; r new default) | grep -c "is a relevo command")" = 2 ]
 cleanup
 
 setup "tampered switch request"

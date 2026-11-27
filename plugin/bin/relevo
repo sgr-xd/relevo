@@ -14,6 +14,10 @@
 # and reopens the same conversation on the other account, in the same terminal. Usage numbers
 # come only from Claude Code itself (its status line and its /usage command).
 #
+# `relevo start` opens the default account: the one you last switched to, or the one set with
+# `relevo default <name>`. To have plain `claude` do the same (and so every session can switch in
+# place), add to your shell profile:  claude() { relevo start "$@"; }
+#
 # Never reads or prints credentials. Never touches the default profile's login. A profile's
 # folder is never renamed: Claude Code ties the login to the folder's path.
 set -u
@@ -23,16 +27,17 @@ BASE="${RELEVO_HOME:-$HOME/.claude-profiles}"
 MAIN="$HOME/.claude"
 NAMES="$BASE/.names"            # lines: "<name> <target>", target = main or a folder in BASE
 SWITCH_DIR="$BASE/.switch"
+DEFAULT="$BASE/.default"        # one line: the target relevo start opens (main when absent)
 BIN_COPY="$BASE/.bin/$PROG"     # stable copy that ~/.local/bin/relevo points to
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 NAME_RE='^[a-z0-9][a-z0-9._-]{0,63}$'
 # The commands /relevo runs inside a Claude Code session, besides `switch` (which the plugin
 # handles itself). plugin/hooks/register.ts allows exactly these; a test keeps the two equal.
-IN_SESSION="account list rename names new fix install help"
+IN_SESSION="account default list rename names new fix install help"
 USAGE_DIR="$BASE/.usage"        # <t>.json last-seen status-line usage, <t>.live /usage lines,
                                 # <t>.login login-expiry cache, <t>.limited last rate-limit stop
 PREFS="$BASE/.prefs"            # warn_days=N, written from the plugin's settings at session start
-RESERVED=" main add list account statusline names new fix run rename install help "
+RESERVED=" main add list account statusline names new fix run rename install help start default "
 NOTES=""                        # warnings collected while checking usage
 LIVE_TTL=60                     # seconds a live /usage result is reused
 USAGE_TIMEOUT="${RELEVO_USAGE_TIMEOUT:-20}"; [[ "$USAGE_TIMEOUT" =~ ^[0-9]{1,3}$ ]] || USAGE_TIMEOUT=20
@@ -84,6 +89,20 @@ current_target() {
   [ -z "${CLAUDE_CONFIG_DIR:-}" ] && echo main
   return 0
 }
+
+# The account new sessions start as: what .default names, if that account still exists; else main.
+default_target() {
+  local t
+  t="$(sed -n 1p "$DEFAULT" 2>/dev/null)"
+  [ -n "$t" ] || { echo main; return 0; }
+  if [[ "$t" =~ $NAME_RE ]] && { [ "$t" = main ] || { [ -d "$BASE/$t" ] && [ ! -L "$BASE/$t" ]; }; }; then
+    echo "$t"; return 0
+  fi
+  printf '%s: the default account no longer exists; using %s (change it: %s default <name>)\n' \
+    "$PROG" "$(name_of main)" "$PROG" >&2
+  echo main
+}
+set_default() { mkdir -p "$BASE" && chmod 700 "$BASE" && put_file "$DEFAULT" "$1"; }
 
 targets() { echo main; [ -d "$BASE" ] && for d in "$BASE"/*/; do [ -d "$d" ] && [ ! -L "${d%/}" ] && basename "$d"; done; }
 
@@ -352,14 +371,42 @@ cmd_switch() {
   fi
   dir="${CLAUDE_PROJECT_DIR:-$PWD}"
   if [ -z "${RELEVO_WRAPPER:-}" ] || ! [[ "$RELEVO_WRAPPER" =~ ^[0-9]+$ ]] || ! kill -0 "$RELEVO_WRAPPER" 2>/dev/null; then
-    printf 'This session was not started with %s, so it cannot reopen itself.\nExit, then run:  cd %q && %s %s --resume %s\n' \
-      "$PROG" "$dir" "$PROG" "$want" "$sid"
+    printf 'This session was not started with %s, so it cannot reopen itself.\nExit, then run:  cd %q && %s %s --resume %s\n%s\n' \
+      "$PROG" "$dir" "$PROG" "$want" "$sid" "$(remember "$to" "$want")"
+    printf 'So that /%s switch reopens sessions by itself, add to your shell profile:  claude() { %s start "$@"; }\n' \
+      "$PROG" "$PROG"
     exit 3
   fi
   mkdir -p "$SWITCH_DIR" && chmod 700 "$SWITCH_DIR" || die "could not create $SWITCH_DIR"
   tmp="$(mktemp "$SWITCH_DIR/.req.XXXXXX")" && printf '%s\n%s\n%s\n' "$to" "$sid" "$dir" > "$tmp" \
     && mv "$tmp" "$SWITCH_DIR/$RELEVO_WRAPPER" || die "could not write the switch request"
-  echo "Switching to $want: this session closes and reopens as $want with the same conversation."
+  echo "Switching to $want: this session closes and reopens as $want with the same conversation. $(remember "$to" "$want")"
+}
+# The person chose this account in /relevo switch: new sessions open on it too (relevo start).
+remember() {  # target name
+  if set_default "$1"; then echo "New sessions (relevo start) now open as $2."
+  else echo "Could not save $2 as the default account."; fi
+}
+
+# relevo default: which account relevo start opens. relevo default <name>: set it.
+cmd_default() {
+  local want="${1:-}" t
+  if [ -z "$want" ]; then
+    echo "New sessions (relevo start) open as $(name_of "$(default_target)")."
+    return 0
+  fi
+  valid "$want"; t="$(resolve "$want")"
+  [ -n "$t" ] || die "no account named '$want' ($PROG list shows them)"
+  set_default "$t" || die "could not save the default account"
+  echo "New sessions (relevo start) now open as $(name_of "$t")."
+}
+
+# relevo start [claude args]: Claude Code as the default account, inside the switch wrapper.
+# Called from inside a Claude Code session (a tool running claude -p through a shell function),
+# it adds nothing: that claude keeps the session's account and gets no wrapper.
+cmd_start() {
+  [ -n "${CLAUDECODE:-}" ] && exec claude "$@"
+  run_loop "$(default_target)" "$@"
 }
 
 cmd_names() {
@@ -675,6 +722,7 @@ in_session_line() {  # subcommand -> "usage|what it does" for the help
   case "$1" in
     switch)  echo "switch <name>|continue this conversation on another account" ;;
     account) echo "account|your accounts: login and usage, this session marked" ;;
+    default) echo "default [<name>]|the account new sessions open as; set it" ;;
     list)    echo "list|the same table, without the mark" ;;
     rename)  echo "rename <name> <new>|give an account another name" ;;
     names)   echo "names|name every account after its email" ;;
@@ -705,12 +753,14 @@ cmd_help() {
     echo
     echo "In a terminal"
     printf '  %-30s %s\n' "$PROG <name> [claude args]" "(terminal only) start Claude Code as that account" \
+      "$PROG start [claude args]" "(terminal only) start Claude Code as the default account" \
       "$PROG add <email> [--sso]" "(terminal only) add an account with Claude Code's sign-in" \
       "$PROG run <name> [args]" "(terminal only) like $PROG <name>, for a name that is a command" \
       "$PROG statusline" "(terminal only) the status-line segment, set in settings.json"
   else
     echo "In a terminal"
     printf '  %-30s %s\n' "$PROG <name> [claude args]" "start Claude Code as that account" \
+      "$PROG start [claude args]" "start it as the default account (last switched to)" \
       "$PROG run <name> [args]" "the same, for a name that is also a command" \
       "$PROG add <email> [--sso]" "add an account with Claude Code's own sign-in (--name <n>)" \
       "$PROG list [--cached]" "accounts, login and usage (--cached: no live check)" \
@@ -767,6 +817,8 @@ case "$cmd" in
   _limited) cmd_limited ;;
   _login_cache) [[ "${2:-}" =~ $NAME_RE ]] && { [ "$2" = main ] || [ -d "$BASE/$2" ]; } && login_state "$2" ;;
   statusline) cmd_statusline ;;
+  start)   shift; cmd_start "$@" ;;
+  default) shift; cmd_default "$@" ;;
   account) shift; cmd_account "$@" ;;
   add)     shift; cmd_add "$@" ;;
   rename)  shift; cmd_rename "$@" ;;
