@@ -4,6 +4,29 @@ All notable changes to Relevo. Versions follow `version` in `plugin/.claude-plug
 
 ## [Unreleased]
 
+Version 0.4.0.
+
+### Added
+
+- `relevo shell [--add|--remove]`, and `/relevo shell`: whether plain `claude` starts through
+  Relevo, and adding or removing the line that makes it. `/relevo install` asks about it, and
+  so does `/relevo switch` in a session it can't reopen. Nothing is written unless the person
+  answers "Add the line" or runs `--add`.
+- What it writes: two marked lines in `~/.zshrc` (or `$ZDOTDIR/.zshrc`), `~/.bashrc` on Linux,
+  or `~/.bash_profile`/`~/.bashrc` on macOS bash. It writes nothing, and prints the line instead,
+  for other shells, for macOS bash without `~/.bash_profile`, when the file has the person's own
+  `claude` alias or function, or when the file can't be written. It appends in place, so a
+  symlinked profile stays a symlink. `--remove` takes out only those two lines.
+- The line uses `function claude {` so an alias named `claude` can't break it when the file is read.
+
+### Changed
+
+- `/relevo switch` in a session that relevo did not start, when the shell line is already
+  there, now says the session is older than the line, instead of suggesting the line again.
+- `shell` is now a command word.
+
+## [0.3.0] - 2026-11-27
+
 Version 0.3.0.
 
 ### Added

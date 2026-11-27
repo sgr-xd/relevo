@@ -227,3 +227,83 @@ test('only the "Switch anyway" answer adds --anyway, and only after the plain ch
 
   expect(seen.ran.map(r => r.argv.slice(1))).toEqual([['_switch', 'bob'], ['_switch', 'bob', '--anyway']])
 })
+
+// --- the shell line: written only after the person's "Add the line" ---------------------------
+const INSTALLED = { code: 0, out: 'Installed: ~/.local/bin/relevo\n' }
+const ABSENT = { code: 0, out: 'absent ~/.zshrc\n' }
+const ADDED = { code: 0, out: 'Added to ~/.zshrc: plain claude now opens your default account.\n' }
+const NOT_STARTED = { code: 5, out: 'This session was not started with relevo, so it cannot reopen itself.\n' }
+
+test('/relevo install offers the shell line; "Add the line" adds it', async ($, on) => {
+  const seen = scripted(on, [INSTALLED, ABSENT, ADDED])
+  const asked = answerAsk(on, 'Add the line')
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+  const out = await $.command.run({ command: 'relevo', args: 'install' })
+
+  expect(asked[0]).toContain('This adds one line to ~/.zshrc; relevo shell --remove takes it out.')
+  expect(seen.ran.map(r => r.argv.slice(1))).toEqual([['install'], ['_shell'], ['shell', '--add']])
+  expect(out.text).toBe('Installed: ~/.local/bin/relevo\nAdded to ~/.zshrc: plain claude now opens your default account.')
+})
+
+for (const [name, label] of [['says "Not now"', 'Not now'], ['closes the question', null]] as const) {
+  test(`/relevo install writes no shell line when the person ${name}`, async ($, on) => {
+    const seen = scripted(on, [INSTALLED, ABSENT, ADDED])
+    answerAsk(on, label)
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+    const out = await $.command.run({ command: 'relevo', args: 'install' })
+
+    expect(seen.ran.some(r => r.argv.includes('--add'))).toBe(false)
+    expect(out.text).toBe('Installed: ~/.local/bin/relevo')
+  })
+}
+
+for (const state of ['present ~/.zshrc', 'ours ~/.zshrc', 'conflict ~/.zshrc', 'unsupported ']) {
+  test(`/relevo install asks nothing when the CLI says "${state.trim()}"`, async ($, on) => {
+    const seen = scripted(on, [INSTALLED, { code: 0, out: `${state}\n` }, ADDED])
+    const asked = answerAsk(on, 'Add the line')
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+    await $.command.run({ command: 'relevo', args: 'install' })
+
+    expect(asked).toEqual([])
+    expect(seen.ran.some(r => r.argv.includes('--add'))).toBe(false)
+  })
+}
+
+test('a failed /relevo install asks nothing', async ($, on) => {
+  const seen = scripted(on, [{ code: 1, out: 'relevo: could not create folders\n' }, ABSENT, ADDED])
+  const asked = answerAsk(on, 'Add the line')
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+  await $.command.run({ command: 'relevo', args: 'install' })
+
+  expect(asked).toEqual([])
+  expect(seen.ran.map(r => r.argv[1])).toEqual(['install'])
+})
+
+test('/relevo switch in a session relevo did not start offers the line, and keeps the session', async ($, on) => {
+  const seen = scripted(on, [NOT_STARTED, ABSENT, ADDED])
+  const asked = answerAsk(on, 'Add the line')
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+  const out = await $.command.run({ command: 'relevo', args: 'switch bob' })
+
+  expect(asked[0]).toContain('so /relevo switch reopens by itself next time?')
+  expect(seen.ran.map(r => r.argv.slice(1))).toEqual([['_switch', 'bob'], ['_shell'], ['shell', '--add']])
+  expect(out.text).toContain('Added to ~/.zshrc')
+  await settle(() => false)
+  expect(seen.exits).toEqual([])
+})
+
+test('/relevo switch in a session relevo did not start: "Not now" writes nothing', async ($, on) => {
+  const seen = scripted(on, [NOT_STARTED, ABSENT, ADDED])
+  answerAsk(on, 'Not now')
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+  const out = await $.command.run({ command: 'relevo', args: 'switch bob' })
+
+  expect(seen.ran.some(r => r.argv.includes('--add'))).toBe(false)
+  expect(out.text).toBe('This session was not started with relevo, so it cannot reopen itself.')
+})
