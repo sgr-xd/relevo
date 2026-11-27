@@ -34,6 +34,14 @@
    ```
    It shows `jane.doe · 5h 12% · 7d 40% · Opus`, adds a warning when the login expires soon,
    and remembers the usage it sees for `relevo list`.
+6. **Start every session through Relevo (optional, recommended).** Add this line to your shell
+   profile (`~/.zshrc` or `~/.bashrc`), then open a new terminal:
+   ```sh
+   command -v relevo > /dev/null && claude() { relevo start "$@"; }
+   ```
+   Plain `claude` then opens the default account (the one you last switched to), and every
+   session can `/relevo switch` in place. Claude Code's own tools are unaffected: a `claude` run
+   from inside a session keeps that session's account. `command claude` skips Relevo.
 
 **Coming from a hand-made setup?** If you have a personal `~/.claude/commands/switch.md`,
 delete it after installing: Relevo's command is `/relevo switch`, and the old one would run
@@ -45,6 +53,8 @@ Never rename a profile folder: Claude Code ties the login to the folder's path.
 | In a terminal | Does |
 |---|---|
 | `relevo <name> [claude args]` | Start Claude Code as that account. `relevo run <name>` is the same, for a name that matches a command |
+| `relevo start [claude args]` | Start Claude Code as the default account: the one you last switched to (main until then) |
+| `relevo default [<name>]` | Show or set the default account |
 | `relevo list` | Every account: login expiry, and its 5-hour and weekly usage, live from Claude Code's `/usage` |
 | `relevo list --cached` | The same without the live check: what the status line last saw |
 | `relevo add <email> [--sso] [--name <n>]` | Add an account through Claude Code's sign-in page |
@@ -55,6 +65,7 @@ Never rename a profile folder: Claude Code ties the login to the folder's path.
 |---|---|
 | `/relevo switch <name>` | Close this session and reopen the same conversation on that account, in this terminal |
 | `/relevo account` | The account table, with this session's account marked |
+| `/relevo default [<name>]` | Show or set the account new sessions open as |
 | `/relevo list`, `/relevo install`, … | The CLI commands that are safe inside a session |
 
 None of these slash commands starts a model turn. Their output is for you and is not sent to
@@ -70,8 +81,11 @@ conversation with `claude --resume <id>` on bob's profile, from the project fold
 - If `bob` is at 100% of a limit, `/relevo switch` shows Claude Code's own line, with the reset time,
   and asks "Switch anyway?". Nothing happens unless you say so.
 - If `bob`'s login has expired, it says: `Sign in again: relevo bob, then /login`.
-- In a session started with plain `claude`, it can't reopen itself. It prints the command
-  instead: `cd <project> && relevo bob --resume <id>`.
+- `bob` becomes the default account: `relevo start` (and plain `claude`, with the shell line
+  from step 6) opens bob from then on. `relevo <name>` never changes the default.
+- In a session started with plain `claude` (without that line), it can't reopen itself. It
+  prints the command instead, `cd <project> && relevo bob --resume <id>`, and still makes bob
+  the default.
 - The reopened session gets only `--resume`; other flags from the first start (such as
   `--model`) are not carried over.
 
@@ -111,6 +125,7 @@ line. It never switches by itself.
 |---|---|
 | `~/.claude-profiles/<folder>/` | One profile per account. Its login stays here, written by Claude Code; everything else links to `~/.claude` |
 | `~/.claude-profiles/.names` | `name folder` pairs |
+| `~/.claude-profiles/.default` | The default account's folder (`main` for `~/.claude`) |
 | `~/.claude-profiles/.switch/` | Short-lived notes from `/relevo switch` to the wrapper |
 | `~/.claude-profiles/.usage/` | Last-seen usage, live results, login-expiry cache |
 | `~/.claude-profiles/.bin/relevo`, `~/.local/bin/relevo` | The CLI copy and its link (`relevo install`) |
@@ -125,6 +140,9 @@ default account. It never calls an Anthropic server itself: login dates come fro
 - **`relevo: command not found`**: run `/relevo install` in Claude Code, and check that
   `~/.local/bin` is on your PATH.
 - **`/relevo switch` says the session was not started with relevo**: exit and run the command it
-  printed.
+  printed. To stop seeing this, add the shell line from step 6 of setup.
+- **A new `claude` opens the wrong account**: `relevo default` says which one it opens;
+  `relevo default <name>` changes it. Without the shell line from step 6, plain `claude` always
+  opens your first account.
 - **A setting you changed in one account didn't stick**: something replaced that profile's
   shared link with a real file. Run `relevo fix <name>`; it says which item it is.

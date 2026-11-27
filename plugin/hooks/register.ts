@@ -12,7 +12,7 @@ const CLI = 'relevo'
 // What /relevo runs inside a session besides `switch`, which is handled below. Never `run`/
 // `<name>` (that would start a nested Claude Code) or `add` (a browser sign-in belongs in a
 // terminal). Must equal IN_SESSION in bin/relevo; test/run.sh checks that it does.
-const IN_SESSION = ['account', 'list', 'rename', 'names', 'new', 'fix', 'install', 'help']
+const IN_SESSION = ['account', 'default', 'list', 'rename', 'names', 'new', 'fix', 'install', 'help']
 // An account name, as bin/relevo's NAME_RE: never an option, so a typed word can't pass flags.
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const SWITCH_USAGE = `usage: /${CLI} switch <name>   (${CLI} list shows the names)`
@@ -66,8 +66,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: CLI,
-      description: 'Accounts: switch, account, list, rename, names, install',
-      argumentHint: 'switch <name> | account | list | rename <name> <new> | names | install',
+      description: 'Accounts: switch, account, default, list, rename, names, install',
+      argumentHint: 'switch <name> | account | default [<name>] | list | rename <name> <new> | names | install',
     })
     // Save the plugin's settings for the terminal CLI, and keep the copy on PATH current.
     void relevo($, ['_sync'], warnDays).catch(() => undefined)

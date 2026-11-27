@@ -4,7 +4,28 @@ All notable changes to Relevo. Versions follow `version` in `plugin/.claude-plug
 
 ## [Unreleased]
 
-Version 0.2.0. Breaking: the slash commands moved.
+Version 0.3.0.
+
+### Added
+
+- A default account. `/relevo switch <name>` makes that account the default, and
+  `relevo start [claude args]` opens it inside the switch wrapper. `relevo default [<name>]`
+  (or `/relevo default` in a session) shows or sets it; it is kept in
+  `~/.claude-profiles/.default`. `relevo <name>` never changes it.
+- With `claude() { relevo start "$@"; }` in the shell profile, plain `claude` opens the
+  default account and every session can switch in place. A `claude` run from inside a Claude
+  Code session (`CLAUDECODE` set) keeps that session's account and gets no wrapper.
+- When a session can't reopen itself, `/relevo switch` still makes the account the default and
+  prints that shell line.
+
+### Changed
+
+- `start` and `default` are now command words: no profile folder or name can use them. A name
+  already set to either still works with `relevo run <name>`.
+
+## [0.2.0] - 2026-11-18
+
+Breaking: the slash commands moved.
 
 ### Changed
 
